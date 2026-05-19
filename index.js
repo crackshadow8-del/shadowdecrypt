@@ -13,7 +13,8 @@ app.use(express.json({
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
-const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const API =
+  `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 if (!fs.existsSync("downloads")) {
   fs.mkdirSync("downloads");
@@ -27,21 +28,30 @@ if (!fs.existsSync("output")) {
 
 async function sendMessage(chatId, text) {
 
-  return axios.post(`${API}/sendMessage`, {
-    chat_id: chatId,
-    text,
-    parse_mode: "HTML"
-  });
+  return axios.post(
+    `${API}/sendMessage`,
+    {
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML"
+    }
+  );
 }
 
 /* ================= SEND DOCUMENT ================= */
 
-async function sendDocument(chatId, filePath, caption = "") {
+async function sendDocument(
+  chatId,
+  filePath,
+  caption = ""
+) {
 
   const form = new FormData();
 
   form.append("chat_id", chatId);
+
   form.append("caption", caption);
+
   form.append("parse_mode", "HTML");
 
   form.append(
@@ -59,26 +69,31 @@ async function sendDocument(chatId, filePath, caption = "") {
   );
 }
 
-/* ================= DOWNLOAD TELEGRAM FILE ================= */
+/* ================= DOWNLOAD FILE ================= */
 
-async function downloadTelegramFile(fileId, savePath) {
+async function downloadTelegramFile(
+  fileId,
+  savePath
+) {
 
   const res = await axios.get(
     `${API}/getFile?file_id=${fileId}`
   );
 
-  const tgFilePath = res.data.result.file_path;
+  const tgFilePath =
+    res.data.result.file_path;
 
-  const url =
+  const fileURL =
     `https://api.telegram.org/file/bot${BOT_TOKEN}/${tgFilePath}`;
 
   const response = await axios({
-    url,
+    url: fileURL,
     method: "GET",
     responseType: "stream"
   });
 
-  const writer = fs.createWriteStream(savePath);
+  const writer =
+    fs.createWriteStream(savePath);
 
   response.data.pipe(writer);
 
@@ -87,113 +102,250 @@ async function downloadTelegramFile(fileId, savePath) {
     writer.on("finish", resolve);
 
     writer.on("error", reject);
+
   });
 }
 
 /* ================= DECRYPT ENGINE ================= */
 
-async function decryptHTML(inputPath, outputPath) {
+async function decryptHTML(
+  inputPath,
+  outputPath
+) {
 
-  const browser = await puppeteer.launch({
+  const browser =
+    await puppeteer.launch({
 
-    headless: "new",
+      headless: "new",
 
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu"
-    ]
-  });
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu"
+      ]
+    });
 
   try {
 
-    const page = await browser.newPage();
+    const page =
+      await browser.newPage();
 
     await page.setViewport({
       width: 1920,
       height: 1080
     });
 
+    /* ================= HOOK SCRIPTS ================= */
+
+    await page.evaluateOnNewDocument(() => {
+
+      window.__shadow_scripts = [];
+
+      /* ===== capture appendChild scripts ===== */
+
+      const originalAppend =
+        Element.prototype.appendChild;
+
+      Element.prototype.appendChild =
+        function(child) {
+
+          try {
+
+            if (
+              child &&
+              child.tagName === "SCRIPT"
+            ) {
+
+              window.__shadow_scripts.push(
+                child.outerHTML ||
+                child.innerHTML ||
+                ""
+              );
+            }
+
+          } catch(e) {}
+
+          return originalAppend.call(
+            this,
+            child
+          );
+        };
+
+      /* ===== capture document.write ===== */
+
+      const originalWrite =
+        document.write;
+
+      document.write = function(html) {
+
+        try {
+
+          window.__shadow_scripts.push(
+            html
+          );
+
+        } catch(e) {}
+
+        return originalWrite.call(
+          this,
+          html
+        );
+      };
+
+      /* ===== capture eval ===== */
+
+      const originalEval = window.eval;
+
+      window.eval = function(code) {
+
+        try {
+
+          window.__shadow_scripts.push(
+            `<script>${code}</script>`
+          );
+
+        } catch(e) {}
+
+        return originalEval(code);
+      };
+
+      /* ===== capture Function ===== */
+
+      const OriginalFunction =
+        window.Function;
+
+      window.Function = function(...args) {
+
+        try {
+
+          const body =
+            args.join(",");
+
+          window.__shadow_scripts.push(
+            `<script>${body}</script>`
+          );
+
+        } catch(e) {}
+
+        return OriginalFunction(...args);
+      };
+
+    });
+
+    /* ================= OPEN FILE ================= */
+
     await page.goto(
+
       `file://${path.resolve(inputPath)}`,
+
       {
         waitUntil: "networkidle2",
         timeout: 0
       }
     );
 
-    // allow encrypted JS to execute
+    /* ================= WAIT ================= */
+
     await new Promise(resolve =>
-      setTimeout(resolve, 8000)
+      setTimeout(resolve, 10000)
     );
 
-    const finalHTML = await page.evaluate(() => {
+    /* ================= GET FINAL HTML ================= */
 
-      /* ================= REMOVE HUGE ENCRYPTED COMMENTS ================= */
+    const finalHTML =
+      await page.evaluate(() => {
 
-      const comments = [];
+        /* ===== remove huge comments ===== */
 
-      const walker = document.createTreeWalker(
-        document,
-        NodeFilter.SHOW_COMMENT
-      );
+        const comments = [];
 
-      while (walker.nextNode()) {
-        comments.push(walker.currentNode);
-      }
+        const walker =
+          document.createTreeWalker(
+            document,
+            NodeFilter.SHOW_COMMENT
+          );
 
-      comments.forEach(comment => {
+        while (walker.nextNode()) {
 
-        const txt = comment.nodeValue || "";
-
-        // remove only massive encrypted garbage
-        if (
-          txt.length > 100000
-        ) {
-          comment.remove();
+          comments.push(
+            walker.currentNode
+          );
         }
-      });
 
-      /* ================= SCRIPT CLEANER ================= */
+        comments.forEach(comment => {
 
-      document.querySelectorAll("script").forEach(script => {
-
-        const code = script.innerHTML || "";
-
-        // REMOVE ONLY MASSIVE ENCRYPTED BLOBS
-        // keep useful JS alive
-        if (
-          code.length > 300000
-        ) {
-          script.remove();
-        }
-      });
-
-      /* ================= REMOVE MALICIOUS ATTRIBUTES ================= */
-
-      document.querySelectorAll("*").forEach(el => {
-
-        [...el.attributes].forEach(attr => {
-
-          const name = attr.name.toLowerCase();
+          const txt =
+            comment.nodeValue || "";
 
           if (
-            name === "nonce"
+            txt.length > 100000
           ) {
-            el.removeAttribute(attr.name);
+            comment.remove();
           }
+
         });
-      });
 
-      /* ================= RETURN FINAL HTML ================= */
+        /* ===== remove ONLY huge encrypted scripts ===== */
 
-      return `
+        document
+          .querySelectorAll("script")
+          .forEach(script => {
+
+            const code =
+              script.innerHTML || "";
+
+            if (
+              code.length > 500000
+            ) {
+              script.remove();
+            }
+
+          });
+
+        /* ===== clean nonce attrs ===== */
+
+        document
+          .querySelectorAll("*")
+          .forEach(el => {
+
+            [...el.attributes]
+            .forEach(attr => {
+
+              if (
+                attr.name.toLowerCase() ===
+                "nonce"
+              ) {
+
+                el.removeAttribute(
+                  attr.name
+                );
+              }
+
+            });
+
+          });
+
+        /* ===== captured runtime scripts ===== */
+
+        const capturedScripts =
+          window.__shadow_scripts
+          .join("\n\n");
+
+        /* ===== FINAL OUTPUT ===== */
+
+        return `
 <!DOCTYPE html>
-${document.documentElement.outerHTML}
-      `.trim();
 
-    });
+${document.documentElement.outerHTML}
+
+<!-- SHADOW RUNTIME SCRIPTS -->
+
+${capturedScripts}
+
+        `.trim();
+
+      });
 
     fs.writeFileSync(
       outputPath,
@@ -201,9 +353,12 @@ ${document.documentElement.outerHTML}
       "utf8"
     );
 
-  } finally {
+  }
+
+  finally {
 
     await browser.close();
+
   }
 }
 
@@ -211,135 +366,169 @@ ${document.documentElement.outerHTML}
 
 app.get("/", (req, res) => {
 
-  res.send("SHADOWDECRYPT BOT ONLINE");
+  res.send(
+    "SHADOWDECRYPT BOT ONLINE"
+  );
+
 });
 
 /* ================= WEBHOOK ================= */
 
-app.post("/webhook", async (req, res) => {
+app.post(
+  "/webhook",
+  async (req, res) => {
 
-  try {
+    try {
 
-    const message = req.body.message;
+      const message =
+        req.body.message;
 
-    if (!message) {
-      return res.sendStatus(200);
-    }
+      if (!message) {
 
-    const chatId = message.chat.id;
+        return res.sendStatus(200);
+      }
 
-    /* ================= START ================= */
+      const chatId =
+        message.chat.id;
 
-    if (message.text === "/start") {
+      /* ===== START ===== */
 
-      await sendMessage(
-        chatId,
-        `🔥 <b>SHADOWDECRYPT BOT ONLINE</b>
+      if (
+        message.text === "/start"
+      ) {
+
+        await sendMessage(
+
+          chatId,
+
+`🔥 <b>SHADOWDECRYPT BOT</b>
+
+✅ Full HTML
+✅ Full CSS
+✅ Runtime JavaScript
+✅ Dynamic Scripts
+✅ Eval Capture
+✅ DOM Render
 
 Send encrypted HTML file.`
-      );
 
-      return res.sendStatus(200);
-    }
+        );
 
-    /* ================= DOCUMENT CHECK ================= */
+        return res.sendStatus(200);
+      }
 
-    if (!message.document) {
+      /* ===== REQUIRE DOCUMENT ===== */
+
+      if (!message.document) {
+
+        await sendMessage(
+          chatId,
+          "📄 Please send HTML file."
+        );
+
+        return res.sendStatus(200);
+      }
+
+      const fileId =
+        message.document.file_id;
+
+      const fileName =
+        message.document.file_name ||
+        "file.html";
+
+      const ext =
+        path.extname(fileName)
+        .toLowerCase();
+
+      if (
+        ext !== ".html" &&
+        ext !== ".htm"
+      ) {
+
+        await sendMessage(
+          chatId,
+          "❌ Only HTML files allowed."
+        );
+
+        return res.sendStatus(200);
+      }
+
+      const inputPath =
+        `downloads/${Date.now()}_${fileName}`;
+
+      const outputPath =
+        `output/decrypted_${Date.now()}_${fileName}`;
+
+      /* ===== DOWNLOAD ===== */
 
       await sendMessage(
         chatId,
-        "📄 Please send HTML file."
+        "📥 Downloading HTML..."
       );
 
-      return res.sendStatus(200);
-    }
+      await downloadTelegramFile(
+        fileId,
+        inputPath
+      );
 
-    const fileId = message.document.file_id;
-
-    const fileName =
-      message.document.file_name || "file.html";
-
-    const ext =
-      path.extname(fileName).toLowerCase();
-
-    if (
-      ext !== ".html" &&
-      ext !== ".htm"
-    ) {
+      /* ===== EXECUTE ===== */
 
       await sendMessage(
         chatId,
-        "❌ Only HTML files allowed."
+        "⚡ Executing encrypted JavaScript..."
       );
 
+      await decryptHTML(
+        inputPath,
+        outputPath
+      );
+
+      /* ===== SEND RESULT ===== */
+
+      await sendDocument(
+        chatId,
+        outputPath,
+        "✅ HTML Decrypted Successfully"
+      );
+
+      /* ===== CLEANUP ===== */
+
+      if (
+        fs.existsSync(inputPath)
+      ) {
+
+        fs.unlinkSync(inputPath);
+      }
+
+      if (
+        fs.existsSync(outputPath)
+      ) {
+
+        fs.unlinkSync(outputPath);
+      }
+
       return res.sendStatus(200);
+
     }
 
-    const inputPath =
-      `downloads/${Date.now()}_${fileName}`;
+    catch(err) {
 
-    const outputPath =
-      `output/decrypted_${Date.now()}_${fileName}`;
+      console.error(err);
 
-    /* ================= DOWNLOAD ================= */
-
-    await sendMessage(
-      chatId,
-      "📥 Downloading HTML..."
-    );
-
-    await downloadTelegramFile(
-      fileId,
-      inputPath
-    );
-
-    /* ================= EXECUTE ================= */
-
-    await sendMessage(
-      chatId,
-      "⚡ Executing encrypted JavaScript..."
-    );
-
-    await decryptHTML(
-      inputPath,
-      outputPath
-    );
-
-    /* ================= SEND RESULT ================= */
-
-    await sendDocument(
-      chatId,
-      outputPath,
-      "✅ HTML Decrypted Successfully"
-    );
-
-    /* ================= CLEANUP ================= */
-
-    if (fs.existsSync(inputPath)) {
-      fs.unlinkSync(inputPath);
+      return res.sendStatus(500);
     }
-
-    if (fs.existsSync(outputPath)) {
-      fs.unlinkSync(outputPath);
-    }
-
-    return res.sendStatus(200);
-
-  } catch (err) {
-
-    console.error(err);
-
-    return res.sendStatus(500);
   }
-});
+);
 
 /* ================= START SERVER ================= */
 
-const PORT = process.env.PORT || 3000;
+const PORT =
+  process.env.PORT || 3000;
 
 app.listen(PORT, () => {
 
   console.log(
-    `Server running on port ${PORT}`
+    `Server running on ${PORT}`
   );
+
 });
