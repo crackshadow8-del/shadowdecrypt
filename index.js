@@ -123,14 +123,14 @@ async function decryptHTML(inputPath, outputPath) {
       }
     );
 
-    // wait for JS execution
+    // allow encrypted JS to execute
     await new Promise(resolve =>
-      setTimeout(resolve, 7000)
+      setTimeout(resolve, 8000)
     );
 
     const finalHTML = await page.evaluate(() => {
 
-      /* ================= REMOVE ENCRYPTED COMMENTS ================= */
+      /* ================= REMOVE HUGE ENCRYPTED COMMENTS ================= */
 
       const comments = [];
 
@@ -147,35 +147,30 @@ async function decryptHTML(inputPath, outputPath) {
 
         const txt = comment.nodeValue || "";
 
+        // remove only massive encrypted garbage
         if (
-          txt.includes("$OO") ||
-          txt.includes("O00OO") ||
-          txt.includes("eval(") ||
-          txt.length > 500
+          txt.length > 100000
         ) {
           comment.remove();
         }
       });
 
-      /* ================= REMOVE ENCRYPTED SCRIPTS ================= */
+      /* ================= SCRIPT CLEANER ================= */
 
       document.querySelectorAll("script").forEach(script => {
 
         const code = script.innerHTML || "";
 
+        // REMOVE ONLY MASSIVE ENCRYPTED BLOBS
+        // keep useful JS alive
         if (
-          code.includes("eval(") ||
-          code.includes("atob(") ||
-          code.includes("document.write") ||
-          code.includes("unescape(") ||
-          code.includes("fromCharCode") ||
-          code.length > 50000
+          code.length > 300000
         ) {
           script.remove();
         }
       });
 
-      /* ================= CLEAN ATTRIBUTES ================= */
+      /* ================= REMOVE MALICIOUS ATTRIBUTES ================= */
 
       document.querySelectorAll("*").forEach(el => {
 
@@ -184,7 +179,6 @@ async function decryptHTML(inputPath, outputPath) {
           const name = attr.name.toLowerCase();
 
           if (
-            name.startsWith("on") ||
             name === "nonce"
           ) {
             el.removeAttribute(attr.name);
@@ -192,7 +186,7 @@ async function decryptHTML(inputPath, outputPath) {
         });
       });
 
-      /* ================= RETURN CLEAN HTML ================= */
+      /* ================= RETURN FINAL HTML ================= */
 
       return `
 <!DOCTYPE html>
@@ -248,7 +242,7 @@ Send encrypted HTML file.`
       return res.sendStatus(200);
     }
 
-    /* ================= ONLY DOCUMENT ================= */
+    /* ================= DOCUMENT CHECK ================= */
 
     if (!message.document) {
 
@@ -299,11 +293,11 @@ Send encrypted HTML file.`
       inputPath
     );
 
-    /* ================= DECRYPT ================= */
+    /* ================= EXECUTE ================= */
 
     await sendMessage(
       chatId,
-      "⚡ Executing JavaScript..."
+      "⚡ Executing encrypted JavaScript..."
     );
 
     await decryptHTML(
