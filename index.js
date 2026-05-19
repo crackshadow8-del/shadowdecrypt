@@ -11,9 +11,6 @@ app.use(express.json({
   limit: "50mb"
 }));
 
-process.on("unhandledRejection", console.error);
-process.on("uncaughtException", console.error);
-
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
@@ -35,6 +32,7 @@ async function sendMessage(chatId, text) {
     text: text,
     parse_mode: "HTML"
   });
+
 }
 
 /* ================= SEND DOCUMENT ================= */
@@ -44,19 +42,25 @@ async function sendDocument(chatId, filePath, caption = "") {
   const form = new FormData();
 
   form.append("chat_id", chatId);
+
   form.append("caption", caption);
+
   form.append("parse_mode", "HTML");
-  form.append("document", fs.createReadStream(filePath));
+
+  form.append(
+    "document",
+    fs.createReadStream(filePath)
+  );
 
   await axios.post(
     `${API}/sendDocument`,
     form,
     {
       headers: form.getHeaders(),
-      maxContentLength: Infinity,
       maxBodyLength: Infinity
     }
   );
+
 }
 
 /* ================= DOWNLOAD FILE ================= */
@@ -67,16 +71,17 @@ async function downloadTelegramFile(fileId, savePath) {
     `${API}/getFile?file_id=${fileId}`
   );
 
-  const telegramFilePath =
+  const telegramPath =
     res.data.result.file_path;
 
-  const fileURL =
-    `https://api.telegram.org/file/bot${BOT_TOKEN}/${telegramFilePath}`;
+  const fileUrl =
+    `https://api.telegram.org/file/bot${BOT_TOKEN}/${telegramPath}`;
 
-  const writer = fs.createWriteStream(savePath);
+  const writer =
+    fs.createWriteStream(savePath);
 
   const response = await axios({
-    url: fileURL,
+    url: fileUrl,
     method: "GET",
     responseType: "stream"
   });
@@ -88,10 +93,12 @@ async function downloadTelegramFile(fileId, savePath) {
     writer.on("finish", resolve);
 
     writer.on("error", reject);
+
   });
+
 }
 
-/* ================= DECRYPT HTML ================= */
+/* ================= REAL HTML DECRYPT ================= */
 
 async function decryptHTML(inputPath, outputPath) {
 
@@ -99,134 +106,73 @@ async function decryptHTML(inputPath, outputPath) {
 
     headless: true,
 
-    executablePath: puppeteer.executablePath(),
-
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--single-process",
-      "--no-zygote"
+      "--disable-gpu"
     ]
+
   });
 
   const page = await browser.newPage();
 
+  await page.setViewport({
+    width: 1920,
+    height: 1080
+  });
+
   await page.goto(
+
     `file://${path.resolve(inputPath)}`,
+
     {
       waitUntil: "networkidle2",
-      timeout: 30000
+      timeout: 0
     }
+
   );
 
+  // wait for scripts to finish
   await new Promise(resolve =>
-    setTimeout(resolve, 3000)
+    setTimeout(resolve, 7000)
   );
 
   const finalHTML = await page.evaluate(() => {
 
-    function isReadable(text) {
+    // remove injected decryptor scripts if any
+    document.querySelectorAll("script").forEach(script => {
 
-      const cleanText =
-        text
-          .replace(/[\x00-\x1F\x7F]+/g, "")
-          .trim();
-
-      return !(
-        cleanText === "" ||
-        /(&#\d+;)|(&#x[0-9a-f]+;)/i.test(cleanText) ||
-        /%[0-9a-f]{2}/i.test(cleanText)
-      );
-    }
-
-    function getHTMLFromDOM(node) {
-
-      let html = "";
-
-      switch (node.nodeType) {
-
-        case Node.ELEMENT_NODE:
-
-          let tag =
-            node.tagName.toLowerCase();
-
-          html += `<${tag}`;
-
-          for (let attr of node.attributes) {
-
-            html += ` ${attr.name}="${attr.value}"`;
-          }
-
-          html += ">";
-
-          // KEEP SCRIPT CONTENT
-          if (tag === "script") {
-
-            html += node.innerHTML || "";
-          }
-          else {
-
-            for (let child of node.childNodes) {
-
-              html += getHTMLFromDOM(child);
-            }
-          }
-
-          html += `</${tag}>`;
-
-          break;
-
-        case Node.TEXT_NODE:
-
-          if (isReadable(node.nodeValue)) {
-
-            html += node.nodeValue;
-          }
-
-          break;
-
-        case Node.COMMENT_NODE:
-
-          html += `<!--${node.nodeValue}-->`;
-
-          break;
+      if (
+        script.innerHTML.includes("getHTMLFromDOM") ||
+        script.innerHTML.includes("isReadable")
+      ) {
+        script.remove();
       }
 
-      return html;
-    }
+    });
 
-    /* ================= SAVE ORIGINAL SCRIPTS ================= */
+    // return FULL rendered html
+    return document.documentElement.outerHTML;
 
-    const originalScripts = Array.from(
-      document.querySelectorAll("script")
-    )
-    .map(script => script.outerHTML)
-    .join("\n");
-
-    /* ================= SAVE FINAL DOM ================= */
-
-    const finalDOM =
-      getHTMLFromDOM(document.documentElement);
-
-    return (
-      originalScripts +
-      "\n\n" +
-      finalDOM
-    );
   });
 
-  fs.writeFileSync(outputPath, finalHTML);
+  fs.writeFileSync(
+    outputPath,
+    finalHTML,
+    "utf8"
+  );
 
   await browser.close();
+
 }
 
-/* ================= ROOT ================= */
+/* ================= HOME ================= */
 
 app.get("/", (req, res) => {
 
   res.send("SHADOWDECRYPT BOT ONLINE");
+
 });
 
 /* ================= WEBHOOK ================= */
@@ -238,58 +184,54 @@ app.post("/webhook", async (req, res) => {
     const message = req.body.message;
 
     if (!message) {
-
       return res.sendStatus(200);
     }
 
     const chatId = message.chat.id;
 
-    /* ================= START ================= */
+    /* ===== START ===== */
 
     if (message.text === "/start") {
 
       await sendMessage(
+
         chatId,
-        "🔥 <b>SHADOWDECRYPT BOT ONLINE</b>\n\nSend encrypted HTML file."
+
+        `🔥 <b>SHADOWDECRYPT BOT</b>
+
+Send encrypted HTML file.
+
+✅ Full HTML
+✅ Full CSS
+✅ Full JavaScript
+✅ Rendered DOM
+✅ Proper structure`
+
       );
 
       return res.sendStatus(200);
+
     }
 
-    /* ================= REQUIRE FILE ================= */
+    /* ===== ONLY FILES ===== */
 
     if (!message.document) {
 
       await sendMessage(
         chatId,
-        "📄 Please send HTML file."
+        "📄 Send HTML file."
       );
 
       return res.sendStatus(200);
+
     }
-
-    /* ================= FILE LIMIT ================= */
-
-    if (
-      message.document.file_size >
-      20 * 1024 * 1024
-    ) {
-
-      await sendMessage(
-        chatId,
-        "❌ File too large. Max 20MB."
-      );
-
-      return res.sendStatus(200);
-    }
-
-    /* ================= FILE INFO ================= */
 
     const fileId =
       message.document.file_id;
 
     const fileName =
-      message.document.file_name || "file.html";
+      message.document.file_name ||
+      "file.html";
 
     const inputPath =
       `downloads/${Date.now()}_${fileName}`;
@@ -297,7 +239,7 @@ app.post("/webhook", async (req, res) => {
     const outputPath =
       `output/decrypted_${fileName}`;
 
-    /* ================= DOWNLOAD ================= */
+    /* ===== DOWNLOAD ===== */
 
     await sendMessage(
       chatId,
@@ -309,11 +251,11 @@ app.post("/webhook", async (req, res) => {
       inputPath
     );
 
-    /* ================= DECRYPT ================= */
+    /* ===== DECRYPT ===== */
 
     await sendMessage(
       chatId,
-      "⚡ Executing JavaScript & decrypting..."
+      "⚡ Executing JavaScript..."
     );
 
     await decryptHTML(
@@ -321,34 +263,40 @@ app.post("/webhook", async (req, res) => {
       outputPath
     );
 
-    /* ================= SEND RESULT ================= */
+    /* ===== SEND FILE ===== */
 
     await sendDocument(
+
       chatId,
+
       outputPath,
+
       "✅ HTML Decrypted Successfully"
+
     );
 
-    /* ================= CLEANUP ================= */
+    /* ===== CLEANUP ===== */
 
     if (fs.existsSync(inputPath)) {
-
       fs.unlinkSync(inputPath);
     }
 
     if (fs.existsSync(outputPath)) {
-
       fs.unlinkSync(outputPath);
     }
 
     return res.sendStatus(200);
 
-  } catch (err) {
+  }
 
-    console.error(err);
+  catch (err) {
+
+    console.log(err);
 
     return res.sendStatus(500);
+
   }
+
 });
 
 /* ================= START SERVER ================= */
@@ -361,4 +309,5 @@ app.listen(PORT, () => {
   console.log(
     `Server running on ${PORT}`
   );
+
 });
