@@ -11,6 +11,9 @@ app.use(express.json({
   limit: "50mb"
 }));
 
+process.on("unhandledRejection", console.error);
+process.on("uncaughtException", console.error);
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
@@ -113,13 +116,13 @@ async function decryptHTML(inputPath, outputPath) {
   await page.goto(
     `file://${path.resolve(inputPath)}`,
     {
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle2",
       timeout: 30000
     }
   );
 
   await new Promise(resolve =>
-    setTimeout(resolve, 2000)
+    setTimeout(resolve, 3000)
   );
 
   const finalHTML = await page.evaluate(() => {
@@ -138,6 +141,26 @@ async function decryptHTML(inputPath, outputPath) {
       );
     }
 
+    function isDangerousScript(code) {
+
+      const badPatterns = [
+        "eval(",
+        "debugger",
+        "while(true)",
+        "crypto.subtle",
+        "atob(",
+        "setinterval(",
+        "location.href",
+        "window.open("
+      ];
+
+      code = code.toLowerCase();
+
+      return badPatterns.some(x =>
+        code.includes(x)
+      );
+    }
+
     function getHTMLFromDOM(node) {
 
       let html = "";
@@ -145,13 +168,6 @@ async function decryptHTML(inputPath, outputPath) {
       switch (node.nodeType) {
 
         case Node.ELEMENT_NODE:
-
-          if (
-            node.tagName &&
-            node.tagName.toLowerCase() === "script"
-          ) {
-            return "";
-          }
 
           let tag =
             node.tagName.toLowerCase();
@@ -165,9 +181,25 @@ async function decryptHTML(inputPath, outputPath) {
 
           html += ">";
 
-          for (let child of node.childNodes) {
+          /* ================= KEEP JAVASCRIPT ================= */
 
-            html += getHTMLFromDOM(child);
+          if (tag === "script") {
+
+            const scriptContent =
+              node.innerHTML || "";
+
+            // Remove dangerous encrypted scripts
+            if (!isDangerousScript(scriptContent)) {
+
+              html += scriptContent;
+            }
+          }
+          else {
+
+            for (let child of node.childNodes) {
+
+              html += getHTMLFromDOM(child);
+            }
           }
 
           html += `</${tag}>`;
@@ -237,13 +269,28 @@ app.post("/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    /* ================= NO DOCUMENT ================= */
+    /* ================= REQUIRE FILE ================= */
 
     if (!message.document) {
 
       await sendMessage(
         chatId,
         "📄 Please send HTML file."
+      );
+
+      return res.sendStatus(200);
+    }
+
+    /* ================= FILE LIMIT ================= */
+
+    if (
+      message.document.file_size >
+      20 * 1024 * 1024
+    ) {
+
+      await sendMessage(
+        chatId,
+        "❌ File too large. Max 20MB."
       );
 
       return res.sendStatus(200);
