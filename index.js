@@ -1,114 +1,218 @@
-<?php
+const express = require("express");
+const fs = require("fs");
+const path = require("path");
+const axios = require("axios");
+const FormData = require("form-data");
+const puppeteer = require("puppeteer");
 
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
+const app = express();
+app.use(express.json({ limit: "50mb" }));
 
-date_default_timezone_set("Asia/Kolkata");
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-/* ================= CONFIG ================= */
+if (!fs.existsSync("downloads")) fs.mkdirSync("downloads");
+if (!fs.existsSync("output")) fs.mkdirSync("output");
 
-define("BOT_TOKEN", "8720276947:AAGaHEbvGt-V1-J3WKFZnDkP6rQBG1oaAVI");
-define("API_URL", "https://api.telegram.org/bot" . BOT_TOKEN . "/");
-
-/* ================= PREMIUM EMOJIS ================= */
-define("EMOJI_UNLOCK",    "5890882606668452641");
-define("EMOJI_CHECK",     "6113924871144605986");
-define("EMOJI_SHIELD",    "4958900559139570572");
-define("EMOJI_DOCUMENT",  "5251276970301335582");
-define("EMOJI_DEVELOPER", "6113971389935391397");
-
-function premiumEmoji($emojiId) {
-    return "<tg-emoji emoji-id=\"{$emojiId}\">⭐</tg-emoji>";
+async function sendMessage(chatId, text) {
+  await axios.post(`${API}/sendMessage`, {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML"
+  });
 }
 
-/* ================= FOLDERS ================= */
+async function sendDocument(chatId, filePath, caption = "") {
+  const form = new FormData();
 
-if (!is_dir("data"))    mkdir("data",    0777, true);
-if (!is_dir("uploads")) mkdir("uploads", 0777, true);
-if (!is_dir("output"))  mkdir("output",  0777, true);
+  form.append("chat_id", chatId);
+  form.append("caption", caption);
+  form.append("parse_mode", "HTML");
+  form.append("document", fs.createReadStream(filePath));
 
-/* ================= DATABASE ================= */
-
-$dbFile = "data/users.json";
-if (!file_exists($dbFile)) {
-    file_put_contents($dbFile, json_encode([]));
+  await axios.post(`${API}/sendDocument`, form, {
+    headers: form.getHeaders()
+  });
 }
-$users = json_decode(file_get_contents($dbFile), true);
-if (!is_array($users)) $users = [];
 
-/* ================= UPDATE ================= */
+async function downloadTelegramFile(fileId, savePath) {
+  const res = await axios.get(`${API}/getFile?file_id=${fileId}`);
 
-$rawInput = file_get_contents("php://input");
-$update   = json_decode($rawInput, true);
+  const filePath = res.data.result.file_path;
 
-if (!is_array($update) || (isset($update["ok"]) && isset($update["result"]))) {
-    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-        echo "✅ SHADOWDECRYPT BOT - ONLINE\n";
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
-        echo "👨‍💻 Developer: @Brokenboy46\n";
-        echo "📊 Users: " . count($users) . "\n";
-        echo "🕐 Status: ONLINE - " . date("Y-m-d H:i:s") . "\n";
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+  const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+
+  const writer = fs.createWriteStream(savePath);
+
+  const response = await axios({
+    url,
+    method: "GET",
+    responseType: "stream"
+  });
+
+  response.data.pipe(writer);
+
+  return new Promise((resolve, reject) => {
+    writer.on("finish", resolve);
+    writer.on("error", reject);
+  });
+}
+
+async function decryptHTML(inputPath, outputPath) {
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox"
+    ]
+  });
+
+  const page = await browser.newPage();
+
+  await page.goto(`file://${path.resolve(inputPath)}`, {
+    waitUntil: "networkidle2",
+    timeout: 0
+  });
+
+  await page.waitForTimeout(5000);
+
+  const finalHTML = await page.evaluate(() => {
+
+    function isReadable(text) {
+      const cleanText = text.replace(/[\x00-\x1F\x7F]+/g, '').trim();
+
+      return !(
+        cleanText === "" ||
+        /(&#\d+;)|(&#x[0-9a-f]+;)/i.test(cleanText) ||
+        /%[0-9a-f]{2}/i.test(cleanText)
+      );
     }
-    exit;
-}
 
-$message  = $update["message"]        ?? null;
-$callback = $update["callback_query"] ?? null;
+    function getHTMLFromDOM(node) {
 
-/* ================= API FUNCTIONS ================= */
+      let html = "";
 
-function api($method, $data = []) {
-    $url = API_URL . $method;
-    $ch  = curl_init();
-    curl_setopt($ch, CURLOPT_URL,            $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST,           true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS,     $data);
-    curl_setopt($ch, CURLOPT_TIMEOUT,        60);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    $res = curl_exec($ch);
-    curl_close($ch);
-    return json_decode($res, true);
-}
+      switch (node.nodeType) {
 
-function sendMessage($chatId, $text, $keyboard = null) {
-    $data = [
-        "chat_id"    => $chatId,
-        "text"       => $text,
-        "parse_mode" => "HTML",
-    ];
-    if ($keyboard) {
-        $data["reply_markup"] = json_encode($keyboard);
+        case Node.ELEMENT_NODE:
+
+          let tag = node.tagName.toLowerCase();
+
+          html += `<${tag}`;
+
+          for (let attr of node.attributes) {
+            html += ` ${attr.name}="${attr.value}"`;
+          }
+
+          html += ">";
+
+          for (let child of node.childNodes) {
+            html += getHTMLFromDOM(child);
+          }
+
+          html += `</${tag}>`;
+
+          break;
+
+        case Node.TEXT_NODE:
+
+          if (
+            node.parentElement &&
+            node.parentElement.tagName.toLowerCase() === "script"
+          ) {
+            html += node.nodeValue;
+          }
+          else if (isReadable(node.nodeValue)) {
+            html += node.nodeValue;
+          }
+
+          break;
+
+        case Node.COMMENT_NODE:
+          html += `<!--${node.nodeValue}-->`;
+          break;
+      }
+
+      return html;
     }
-    return api("sendMessage", $data);
+
+    return getHTMLFromDOM(document.documentElement);
+  });
+
+  fs.writeFileSync(outputPath, finalHTML);
+
+  await browser.close();
 }
 
-function editMessage($chatId, $messageId, $text, $keyboard = null) {
-    $data = [
-        "chat_id"    => $chatId,
-        "message_id" => $messageId,
-        "text"       => $text,
-        "parse_mode" => "HTML",
-    ];
-    if ($keyboard) {
-        $data["reply_markup"] = json_encode($keyboard);
+app.get("/", (req, res) => {
+  res.send("SHADOWDECRYPT BOT ONLINE");
+});
+
+app.post("/webhook", async (req, res) => {
+
+  try {
+
+    const message = req.body.message;
+
+    if (!message) {
+      return res.sendStatus(200);
     }
-    return api("editMessageText", $data);
-}
 
-function deleteMessage($chatId, $messageId) {
-    return api("deleteMessage", ["chat_id" => $chatId, "message_id" => $messageId]);
-}
+    const chatId = message.chat.id;
 
-function sendDocument($chatId, $filePath, $caption = "") {
-    if (!file_exists($filePath)) return false;
-    return api("sendDocument", [
-        "chat_id"    => $chatId,
-        "caption"    => $caption,
-        "parse_mode" => "HTML",
+    if (message.text === "/start") {
+
+      await sendMessage(
+        chatId,
+        "🔥 SHADOWDECRYPT BOT ONLINE\n\nSend encrypted HTML file."
+      );
+
+      return res.sendStatus(200);
+    }
+
+    if (!message.document) {
+      return res.sendStatus(200);
+    }
+
+    const fileId = message.document.file_id;
+    const fileName = message.document.file_name || "file.html";
+
+    const inputPath = `downloads/${Date.now()}_${fileName}`;
+    const outputPath = `output/decrypted_${fileName}`;
+
+    await sendMessage(chatId, "📥 Downloading HTML...");
+
+    await downloadTelegramFile(fileId, inputPath);
+
+    await sendMessage(chatId, "⚡ Executing JavaScript & decrypting...");
+
+    await decryptHTML(inputPath, outputPath);
+
+    await sendDocument(
+      chatId,
+      outputPath,
+      "✅ HTML Decrypted Successfully"
+    );
+
+    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+
+    return res.sendStatus(200);
+
+  } catch (err) {
+
+    console.error(err);
+
+    return res.sendStatus(500);
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on ${PORT}`);
+});        "parse_mode" => "HTML",
         "document"   => new CURLFile(realpath($filePath)),
     ]);
 }
