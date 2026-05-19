@@ -106,12 +106,137 @@ async function downloadTelegramFile(
   });
 }
 
-/* ================= DECRYPT ENGINE ================= */
+/* ================= YOUR DECRYPTOR SCRIPT ================= */
+
+const DECRYPT_SCRIPT = `
+<script>
+(function() {
+
+    function isReadable(text) {
+
+        const cleanText =
+            text.replace(/[\\x00-\\x1F\\x7F]+/g, '').trim();
+
+        return !(
+            cleanText === "" ||
+            /(&#\\d+;)|(&#x[0-9a-f]+;)/i.test(cleanText) ||
+            /%[0-9a-f]{2}/i.test(cleanText)
+        );
+    }
+
+    function getHTMLFromDOM(node) {
+
+        let html = "";
+
+        switch (node.nodeType) {
+
+            case Node.ELEMENT_NODE:
+
+                if (node === document.currentScript)
+                    return "";
+
+                let tag =
+                    node.tagName.toLowerCase();
+
+                html += "<" + tag;
+
+                for (let attr of node.attributes) {
+
+                    html +=
+                        \` \${attr.name}="\${attr.value}"\`;
+                }
+
+                html += ">";
+
+                for (let child of node.childNodes) {
+
+                    html += getHTMLFromDOM(child);
+                }
+
+                html += \`</\${tag}>\`;
+
+                break;
+
+            case Node.TEXT_NODE:
+
+                if (
+                    node.parentElement &&
+                    node.parentElement.tagName.toLowerCase() === "script"
+                ) {
+
+                    html += node.nodeValue;
+                }
+
+                else if (
+                    isReadable(node.nodeValue)
+                ) {
+
+                    html += node.nodeValue;
+                }
+
+                break;
+
+            case Node.COMMENT_NODE:
+
+                html +=
+                    \`<!--\${node.nodeValue}-->\`;
+
+                break;
+        }
+
+        return html;
+    }
+
+    let sourceCode =
+        getHTMLFromDOM(document.documentElement);
+
+    let startIndex =
+        sourceCode.indexOf('<meta charset="UTF-8"');
+
+    if (startIndex !== -1) {
+
+        sourceCode =
+            sourceCode.substring(startIndex);
+    }
+
+    let finalText =
+        "<html>\\n" +
+        sourceCode +
+        "\\n</html>";
+
+    document.body.innerHTML =
+        '<pre id="shadow-output"></pre>';
+
+    document
+        .getElementById("shadow-output")
+        .innerText = finalText;
+
+})();
+</script>
+`;
+
+/* ================= DECRYPT HTML ================= */
 
 async function decryptHTML(
   inputPath,
   outputPath
 ) {
+
+  // append decryptor script
+  const originalHTML =
+    fs.readFileSync(inputPath, "utf8");
+
+  const modifiedHTML =
+    originalHTML + DECRYPT_SCRIPT;
+
+  const tempPath =
+    inputPath + "_modified.html";
+
+  fs.writeFileSync(
+    tempPath,
+    modifiedHTML,
+    "utf8"
+  );
 
   const browser =
     await puppeteer.launch({
@@ -131,113 +256,9 @@ async function decryptHTML(
     const page =
       await browser.newPage();
 
-    await page.setViewport({
-      width: 1920,
-      height: 1080
-    });
-
-    /* ================= HOOK SCRIPTS ================= */
-
-    await page.evaluateOnNewDocument(() => {
-
-      window.__shadow_scripts = [];
-
-      /* ===== capture appendChild scripts ===== */
-
-      const originalAppend =
-        Element.prototype.appendChild;
-
-      Element.prototype.appendChild =
-        function(child) {
-
-          try {
-
-            if (
-              child &&
-              child.tagName === "SCRIPT"
-            ) {
-
-              window.__shadow_scripts.push(
-                child.outerHTML ||
-                child.innerHTML ||
-                ""
-              );
-            }
-
-          } catch(e) {}
-
-          return originalAppend.call(
-            this,
-            child
-          );
-        };
-
-      /* ===== capture document.write ===== */
-
-      const originalWrite =
-        document.write;
-
-      document.write = function(html) {
-
-        try {
-
-          window.__shadow_scripts.push(
-            html
-          );
-
-        } catch(e) {}
-
-        return originalWrite.call(
-          this,
-          html
-        );
-      };
-
-      /* ===== capture eval ===== */
-
-      const originalEval = window.eval;
-
-      window.eval = function(code) {
-
-        try {
-
-          window.__shadow_scripts.push(
-            `<script>${code}</script>`
-          );
-
-        } catch(e) {}
-
-        return originalEval(code);
-      };
-
-      /* ===== capture Function ===== */
-
-      const OriginalFunction =
-        window.Function;
-
-      window.Function = function(...args) {
-
-        try {
-
-          const body =
-            args.join(",");
-
-          window.__shadow_scripts.push(
-            `<script>${body}</script>`
-          );
-
-        } catch(e) {}
-
-        return OriginalFunction(...args);
-      };
-
-    });
-
-    /* ================= OPEN FILE ================= */
-
     await page.goto(
 
-      `file://${path.resolve(inputPath)}`,
+      `file://${path.resolve(tempPath)}`,
 
       {
         waitUntil: "networkidle2",
@@ -245,120 +266,41 @@ async function decryptHTML(
       }
     );
 
-    /* ================= WAIT ================= */
-
+    // wait for decryptor script
     await new Promise(resolve =>
-      setTimeout(resolve, 10000)
+      setTimeout(resolve, 8000)
     );
 
-    /* ================= GET FINAL HTML ================= */
-
-    const finalHTML =
+    // extract final decrypted html
+    const decryptedHTML =
       await page.evaluate(() => {
 
-        /* ===== remove huge comments ===== */
-
-        const comments = [];
-
-        const walker =
-          document.createTreeWalker(
-            document,
-            NodeFilter.SHOW_COMMENT
+        const pre =
+          document.querySelector(
+            "#shadow-output"
           );
 
-        while (walker.nextNode()) {
-
-          comments.push(
-            walker.currentNode
-          );
-        }
-
-        comments.forEach(comment => {
-
-          const txt =
-            comment.nodeValue || "";
-
-          if (
-            txt.length > 100000
-          ) {
-            comment.remove();
-          }
-
-        });
-
-        /* ===== remove ONLY huge encrypted scripts ===== */
-
-        document
-          .querySelectorAll("script")
-          .forEach(script => {
-
-            const code =
-              script.innerHTML || "";
-
-            if (
-              code.length > 500000
-            ) {
-              script.remove();
-            }
-
-          });
-
-        /* ===== clean nonce attrs ===== */
-
-        document
-          .querySelectorAll("*")
-          .forEach(el => {
-
-            [...el.attributes]
-            .forEach(attr => {
-
-              if (
-                attr.name.toLowerCase() ===
-                "nonce"
-              ) {
-
-                el.removeAttribute(
-                  attr.name
-                );
-              }
-
-            });
-
-          });
-
-        /* ===== captured runtime scripts ===== */
-
-        const capturedScripts =
-          window.__shadow_scripts
-          .join("\n\n");
-
-        /* ===== FINAL OUTPUT ===== */
-
-        return `
-<!DOCTYPE html>
-
-${document.documentElement.outerHTML}
-
-<!-- SHADOW RUNTIME SCRIPTS -->
-
-${capturedScripts}
-
-        `.trim();
-
+        return pre
+          ? pre.innerText
+          : document.documentElement.outerHTML;
       });
 
     fs.writeFileSync(
       outputPath,
-      finalHTML,
+      decryptedHTML,
       "utf8"
     );
+
+    // cleanup temp
+    if (fs.existsSync(tempPath)) {
+      fs.unlinkSync(tempPath);
+    }
 
   }
 
   finally {
 
     await browser.close();
-
   }
 }
 
@@ -369,7 +311,6 @@ app.get("/", (req, res) => {
   res.send(
     "SHADOWDECRYPT BOT ONLINE"
   );
-
 });
 
 /* ================= WEBHOOK ================= */
@@ -401,14 +342,7 @@ app.post(
 
           chatId,
 
-`🔥 <b>SHADOWDECRYPT BOT</b>
-
-✅ Full HTML
-✅ Full CSS
-✅ Runtime JavaScript
-✅ Dynamic Scripts
-✅ Eval Capture
-✅ DOM Render
+`🔥 SHADOWDECRYPT BOT
 
 Send encrypted HTML file.`
 
@@ -417,7 +351,7 @@ Send encrypted HTML file.`
         return res.sendStatus(200);
       }
 
-      /* ===== REQUIRE DOCUMENT ===== */
+      /* ===== REQUIRE FILE ===== */
 
       if (!message.document) {
 
@@ -475,7 +409,7 @@ Send encrypted HTML file.`
 
       await sendMessage(
         chatId,
-        "⚡ Executing encrypted JavaScript..."
+        "⚡ Decrypting HTML..."
       );
 
       await decryptHTML(
@@ -528,7 +462,7 @@ const PORT =
 app.listen(PORT, () => {
 
   console.log(
-    `Server running on ${PORT}`
+    \`Server running on port \${PORT}\`
   );
 
 });
