@@ -59,7 +59,7 @@ async function sendDocument(chatId, filePath, caption = "") {
   );
 }
 
-/* ================= DOWNLOAD TELEGRAM FILE ================= */
+/* ================= DOWNLOAD FILE ================= */
 
 async function downloadTelegramFile(fileId, savePath) {
 
@@ -141,26 +141,6 @@ async function decryptHTML(inputPath, outputPath) {
       );
     }
 
-    function isDangerousScript(code) {
-
-      const badPatterns = [
-        "eval(",
-        "debugger",
-        "while(true)",
-        "crypto.subtle",
-        "atob(",
-        "setinterval(",
-        "location.href",
-        "window.open("
-      ];
-
-      code = code.toLowerCase();
-
-      return badPatterns.some(x =>
-        code.includes(x)
-      );
-    }
-
     function getHTMLFromDOM(node) {
 
       let html = "";
@@ -181,18 +161,10 @@ async function decryptHTML(inputPath, outputPath) {
 
           html += ">";
 
-          /* ================= KEEP JAVASCRIPT ================= */
-
+          // KEEP SCRIPT CONTENT
           if (tag === "script") {
 
-            const scriptContent =
-              node.innerHTML || "";
-
-            // Remove dangerous encrypted scripts
-            if (!isDangerousScript(scriptContent)) {
-
-              html += scriptContent;
-            }
+            html += node.innerHTML || "";
           }
           else {
 
@@ -225,8 +197,23 @@ async function decryptHTML(inputPath, outputPath) {
       return html;
     }
 
-    return getHTMLFromDOM(
-      document.documentElement
+    /* ================= SAVE ORIGINAL SCRIPTS ================= */
+
+    const originalScripts = Array.from(
+      document.querySelectorAll("script")
+    )
+    .map(script => script.outerHTML)
+    .join("\n");
+
+    /* ================= SAVE FINAL DOM ================= */
+
+    const finalDOM =
+      getHTMLFromDOM(document.documentElement);
+
+    return (
+      originalScripts +
+      "\n\n" +
+      finalDOM
     );
   });
 
