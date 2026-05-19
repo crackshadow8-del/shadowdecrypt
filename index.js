@@ -6,23 +6,38 @@ const FormData = require("form-data");
 const puppeteer = require("puppeteer");
 
 const app = express();
-app.use(express.json({ limit: "50mb" }));
+
+app.use(express.json({
+  limit: "50mb"
+}));
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
+
 const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-if (!fs.existsSync("downloads")) fs.mkdirSync("downloads");
-if (!fs.existsSync("output")) fs.mkdirSync("output");
+if (!fs.existsSync("downloads")) {
+  fs.mkdirSync("downloads");
+}
+
+if (!fs.existsSync("output")) {
+  fs.mkdirSync("output");
+}
+
+/* ================= SEND MESSAGE ================= */
 
 async function sendMessage(chatId, text) {
+
   await axios.post(`${API}/sendMessage`, {
     chat_id: chatId,
-    text,
+    text: text,
     parse_mode: "HTML"
   });
 }
 
+/* ================= SEND DOCUMENT ================= */
+
 async function sendDocument(chatId, filePath, caption = "") {
+
   const form = new FormData();
 
   form.append("chat_id", chatId);
@@ -30,22 +45,35 @@ async function sendDocument(chatId, filePath, caption = "") {
   form.append("parse_mode", "HTML");
   form.append("document", fs.createReadStream(filePath));
 
-  await axios.post(`${API}/sendDocument`, form, {
-    headers: form.getHeaders()
-  });
+  await axios.post(
+    `${API}/sendDocument`,
+    form,
+    {
+      headers: form.getHeaders(),
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
+    }
+  );
 }
 
+/* ================= DOWNLOAD TELEGRAM FILE ================= */
+
 async function downloadTelegramFile(fileId, savePath) {
-  const res = await axios.get(`${API}/getFile?file_id=${fileId}`);
 
-  const filePath = res.data.result.file_path;
+  const res = await axios.get(
+    `${API}/getFile?file_id=${fileId}`
+  );
 
-  const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+  const telegramFilePath =
+    res.data.result.file_path;
+
+  const fileURL =
+    `https://api.telegram.org/file/bot${BOT_TOKEN}/${telegramFilePath}`;
 
   const writer = fs.createWriteStream(savePath);
 
   const response = await axios({
-    url,
+    url: fileURL,
     method: "GET",
     responseType: "stream"
   });
@@ -53,34 +81,55 @@ async function downloadTelegramFile(fileId, savePath) {
   response.data.pipe(writer);
 
   return new Promise((resolve, reject) => {
+
     writer.on("finish", resolve);
+
     writer.on("error", reject);
   });
 }
 
+/* ================= DECRYPT HTML ================= */
+
 async function decryptHTML(inputPath, outputPath) {
 
   const browser = await puppeteer.launch({
+
     headless: true,
+
+    executablePath: puppeteer.executablePath(),
+
     args: [
       "--no-sandbox",
-      "--disable-setuid-sandbox"
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--single-process",
+      "--no-zygote"
     ]
   });
 
   const page = await browser.newPage();
 
-  await page.goto(`file://${path.resolve(inputPath)}`, {
-    waitUntil: "networkidle2",
-    timeout: 0
-  });
+  await page.goto(
+    `file://${path.resolve(inputPath)}`,
+    {
+      waitUntil: "domcontentloaded",
+      timeout: 30000
+    }
+  );
 
-  await page.waitForTimeout(5000);
+  await new Promise(resolve =>
+    setTimeout(resolve, 2000)
+  );
 
   const finalHTML = await page.evaluate(() => {
 
     function isReadable(text) {
-      const cleanText = text.replace(/[\x00-\x1F\x7F]+/g, '').trim();
+
+      const cleanText =
+        text
+          .replace(/[\x00-\x1F\x7F]+/g, "")
+          .trim();
 
       return !(
         cleanText === "" ||
@@ -97,17 +146,27 @@ async function decryptHTML(inputPath, outputPath) {
 
         case Node.ELEMENT_NODE:
 
-          let tag = node.tagName.toLowerCase();
+          if (
+            node.tagName &&
+            node.tagName.toLowerCase() === "script"
+          ) {
+            return "";
+          }
+
+          let tag =
+            node.tagName.toLowerCase();
 
           html += `<${tag}`;
 
           for (let attr of node.attributes) {
+
             html += ` ${attr.name}="${attr.value}"`;
           }
 
           html += ">";
 
           for (let child of node.childNodes) {
+
             html += getHTMLFromDOM(child);
           }
 
@@ -117,27 +176,26 @@ async function decryptHTML(inputPath, outputPath) {
 
         case Node.TEXT_NODE:
 
-          if (
-            node.parentElement &&
-            node.parentElement.tagName.toLowerCase() === "script"
-          ) {
-            html += node.nodeValue;
-          }
-          else if (isReadable(node.nodeValue)) {
+          if (isReadable(node.nodeValue)) {
+
             html += node.nodeValue;
           }
 
           break;
 
         case Node.COMMENT_NODE:
+
           html += `<!--${node.nodeValue}-->`;
+
           break;
       }
 
       return html;
     }
 
-    return getHTMLFromDOM(document.documentElement);
+    return getHTMLFromDOM(
+      document.documentElement
+    );
   });
 
   fs.writeFileSync(outputPath, finalHTML);
@@ -145,9 +203,14 @@ async function decryptHTML(inputPath, outputPath) {
   await browser.close();
 }
 
+/* ================= ROOT ================= */
+
 app.get("/", (req, res) => {
+
   res.send("SHADOWDECRYPT BOT ONLINE");
 });
+
+/* ================= WEBHOOK ================= */
 
 app.post("/webhook", async (req, res) => {
 
@@ -156,38 +219,75 @@ app.post("/webhook", async (req, res) => {
     const message = req.body.message;
 
     if (!message) {
+
       return res.sendStatus(200);
     }
 
     const chatId = message.chat.id;
 
+    /* ================= START ================= */
+
     if (message.text === "/start") {
 
       await sendMessage(
         chatId,
-        "🔥 SHADOWDECRYPT BOT ONLINE\n\nSend encrypted HTML file."
+        "🔥 <b>SHADOWDECRYPT BOT ONLINE</b>\n\nSend encrypted HTML file."
       );
 
       return res.sendStatus(200);
     }
 
+    /* ================= NO DOCUMENT ================= */
+
     if (!message.document) {
+
+      await sendMessage(
+        chatId,
+        "📄 Please send HTML file."
+      );
+
       return res.sendStatus(200);
     }
 
-    const fileId = message.document.file_id;
-    const fileName = message.document.file_name || "file.html";
+    /* ================= FILE INFO ================= */
 
-    const inputPath = `downloads/${Date.now()}_${fileName}`;
-    const outputPath = `output/decrypted_${fileName}`;
+    const fileId =
+      message.document.file_id;
 
-    await sendMessage(chatId, "📥 Downloading HTML...");
+    const fileName =
+      message.document.file_name || "file.html";
 
-    await downloadTelegramFile(fileId, inputPath);
+    const inputPath =
+      `downloads/${Date.now()}_${fileName}`;
 
-    await sendMessage(chatId, "⚡ Executing JavaScript & decrypting...");
+    const outputPath =
+      `output/decrypted_${fileName}`;
 
-    await decryptHTML(inputPath, outputPath);
+    /* ================= DOWNLOAD ================= */
+
+    await sendMessage(
+      chatId,
+      "📥 Downloading HTML..."
+    );
+
+    await downloadTelegramFile(
+      fileId,
+      inputPath
+    );
+
+    /* ================= DECRYPT ================= */
+
+    await sendMessage(
+      chatId,
+      "⚡ Executing JavaScript & decrypting..."
+    );
+
+    await decryptHTML(
+      inputPath,
+      outputPath
+    );
+
+    /* ================= SEND RESULT ================= */
 
     await sendDocument(
       chatId,
@@ -195,8 +295,17 @@ app.post("/webhook", async (req, res) => {
       "✅ HTML Decrypted Successfully"
     );
 
-    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+    /* ================= CLEANUP ================= */
+
+    if (fs.existsSync(inputPath)) {
+
+      fs.unlinkSync(inputPath);
+    }
+
+    if (fs.existsSync(outputPath)) {
+
+      fs.unlinkSync(outputPath);
+    }
 
     return res.sendStatus(200);
 
@@ -208,8 +317,14 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+/* ================= START SERVER ================= */
+
+const PORT =
+  process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on ${PORT}`);
+
+  console.log(
+    `Server running on ${PORT}`
+  );
 });
