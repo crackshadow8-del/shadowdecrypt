@@ -13,7 +13,8 @@ app.use(express.json({
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
-const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+const API =
+  `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 if (!fs.existsSync("downloads")) {
   fs.mkdirSync("downloads");
@@ -29,21 +30,31 @@ async function sendMessage(chatId, text) {
 
   try {
 
-    await axios.post(`${API}/sendMessage`, {
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML"
-    });
+    await axios.post(
+      `${API}/sendMessage`,
+      {
+        chat_id: chatId,
+        text,
+        parse_mode: "HTML"
+      }
+    );
 
   } catch (err) {
 
-    console.log(err.response?.data || err.message);
+    console.log(
+      err.response?.data ||
+      err.message
+    );
   }
 }
 
 /* ================= SEND DOCUMENT ================= */
 
-async function sendDocument(chatId, filePath, caption = "") {
+async function sendDocument(
+  chatId,
+  filePath,
+  caption = ""
+) {
 
   const form = new FormData();
 
@@ -70,7 +81,10 @@ async function sendDocument(chatId, filePath, caption = "") {
 
 /* ================= DOWNLOAD FILE ================= */
 
-async function downloadTelegramFile(fileId, savePath) {
+async function downloadTelegramFile(
+  fileId,
+  savePath
+) {
 
   const res = await axios.get(
     `${API}/getFile?file_id=${fileId}`
@@ -102,146 +116,20 @@ async function downloadTelegramFile(fileId, savePath) {
   });
 }
 
-/* ================= DECRYPT SCRIPT ================= */
+/* ================= INJECTED SCRIPT ================= */
 
 const DECRYPT_SCRIPT = `
 <script>
+
+window.__SHADOW_READY__ = false;
+
 (function() {
 
-    function isReadable(text) {
+    setTimeout(() => {
 
-        const cleanText =
-            text.replace(/[\\\\x00-\\\\x1F\\\\x7F]+/g, '').trim();
+        window.__SHADOW_READY__ = true;
 
-        return !(
-            cleanText === "" ||
-            /(&#\\\\d+;)|(&#x[0-9a-f]+;)/i.test(cleanText) ||
-            /%[0-9a-f]{2}/i.test(cleanText)
-        );
-    }
-
-    function getHTMLFromDOM(node) {
-
-        let html = "";
-
-        switch (node.nodeType) {
-
-            case Node.ELEMENT_NODE:
-
-                if (node === document.currentScript)
-                    return "";
-
-                let tag =
-                    node.tagName.toLowerCase();
-
-                html += "<" + tag;
-
-                for (let attr of node.attributes) {
-
-                    html +=
-                        " " + attr.name + "=" + "\\"" + attr.value + "\\"";
-                }
-
-                html += ">";
-
-                for (let child of node.childNodes) {
-
-                    html += getHTMLFromDOM(child);
-                }
-
-                html += "</" + tag + ">";
-
-                break;
-
-            case Node.TEXT_NODE:
-
-                if (
-                    node.parentElement &&
-                    node.parentElement.tagName.toLowerCase() === "script"
-                ) {
-
-                    html += node.nodeValue;
-                }
-
-                else if (
-                    isReadable(node.nodeValue)
-                ) {
-
-                    html += node.nodeValue;
-                }
-
-                break;
-
-            case Node.COMMENT_NODE:
-
-                html +=
-                    "<!--" + node.nodeValue + "-->";
-
-                break;
-        }
-
-        return html;
-    }
-
-    /* ================= REMOVE ENCRYPTED SCRIPTS ================= */
-
-    document.querySelectorAll("script").forEach(script => {
-
-        const code =
-            (script.innerHTML || "").toLowerCase();
-
-        const src =
-            (script.src || "").toLowerCase();
-
-        if (
-
-            code.includes("eval(") ||
-            code.includes("atob(") ||
-            code.includes("unescape(") ||
-            code.includes("fromcharcode") ||
-            code.includes("document.write") ||
-            code.includes("settimeout(") ||
-            code.includes("function(p,a,c,k,e") ||
-            code.includes("debugger") ||
-            code.includes("while(true)") ||
-            code.length > 5000 ||
-
-            src.includes("googletagmanager") ||
-            src.includes("analytics") ||
-            src.includes("facebook") ||
-            src.includes("tracker")
-
-        ) {
-
-            script.remove();
-        }
-    });
-
-    /* ================= EXTRACT CLEAN HTML ================= */
-
-    let sourceCode =
-        getHTMLFromDOM(document.documentElement);
-
-    let startIndex =
-        sourceCode.indexOf('<meta charset="UTF-8"');
-
-    if (startIndex !== -1) {
-
-        sourceCode =
-            sourceCode.substring(startIndex);
-    }
-
-    let finalText =
-        "<html>\\n" +
-        sourceCode +
-        "\\n</html>";
-
-    document.body.innerHTML =
-        '<pre id="shadow-output"></pre>';
-
-    document
-        .getElementById("shadow-output")
-        .innerText = finalText;
+    }, 12000);
 
 })();
 </script>
@@ -249,7 +137,10 @@ const DECRYPT_SCRIPT = `
 
 /* ================= DECRYPT HTML ================= */
 
-async function decryptHTML(inputPath, outputPath) {
+async function decryptHTML(
+  inputPath,
+  outputPath
+) {
 
   const originalHTML =
     fs.readFileSync(inputPath, "utf8");
@@ -292,21 +183,178 @@ async function decryptHTML(inputPath, outputPath) {
       }
     );
 
-    await new Promise(resolve =>
-      setTimeout(resolve, 12000)
+    // WAIT FOR FULL JS EXECUTION
+
+    await page.waitForFunction(
+      () => window.__SHADOW_READY__ === true,
+      {
+        timeout: 0
+      }
     );
 
     const finalHTML =
       await page.evaluate(() => {
 
-        const pre =
-          document.querySelector(
-            "#shadow-output"
-          );
+        function isReadable(text) {
 
-        return pre
-          ? pre.innerText
-          : document.documentElement.outerHTML;
+          const cleanText =
+            text.replace(
+              /[\x00-\x1F\x7F]+/g,
+              ""
+            ).trim();
+
+          return !(
+            cleanText === "" ||
+            /(&#\d+;)|(&#x[0-9a-f]+;)/i.test(cleanText) ||
+            /%[0-9a-f]{2}/i.test(cleanText)
+          );
+        }
+
+        function getHTMLFromDOM(node) {
+
+          let html = "";
+
+          switch (node.nodeType) {
+
+            case Node.ELEMENT_NODE:
+
+              let tag =
+                node.tagName.toLowerCase();
+
+              html += "<" + tag;
+
+              for (let attr of node.attributes) {
+
+                html +=
+                  ` ${attr.name}="${attr.value}"`;
+              }
+
+              html += ">";
+
+              for (let child of node.childNodes) {
+
+                html +=
+                  getHTMLFromDOM(child);
+              }
+
+              html += `</${tag}>`;
+
+              break;
+
+            case Node.TEXT_NODE:
+
+              if (
+                node.parentElement &&
+                node.parentElement.tagName.toLowerCase() === "script"
+              ) {
+
+                html += node.nodeValue;
+              }
+
+              else if (
+                isReadable(node.nodeValue)
+              ) {
+
+                html += node.nodeValue;
+              }
+
+              break;
+
+            case Node.COMMENT_NODE:
+
+              html +=
+                `<!--${node.nodeValue}-->`;
+
+              break;
+          }
+
+          return html;
+        }
+
+        /* ================= CLONE FINAL DOM ================= */
+
+        const cloned =
+          document.documentElement.cloneNode(true);
+
+        /* ================= REMOVE ENCRYPTED SCRIPTS ================= */
+
+        cloned.querySelectorAll("script")
+        .forEach(script => {
+
+          const code =
+            (script.innerHTML || "")
+            .toLowerCase();
+
+          const src =
+            (script.src || "")
+            .toLowerCase();
+
+          if (
+
+            code.includes("eval(") ||
+            code.includes("atob(") ||
+            code.includes("unescape(") ||
+            code.includes("fromcharcode") ||
+            code.includes("document.write") ||
+            code.includes("function(p,a,c,k,e") ||
+            code.includes("while(true)") ||
+            code.includes("debugger") ||
+            code.length > 8000 ||
+
+            src.includes("analytics") ||
+            src.includes("tracker") ||
+            src.includes("googletagmanager")
+
+          ) {
+
+            script.remove();
+          }
+        });
+
+        /* ================= REMOVE IFRAMES ================= */
+
+        cloned.querySelectorAll("iframe")
+        .forEach(frame => {
+
+          const style =
+            (frame.getAttribute("style") || "")
+            .toLowerCase();
+
+          if (
+            style.includes("display:none") ||
+            style.includes("visibility:hidden")
+          ) {
+
+            frame.remove();
+          }
+        });
+
+        /* ================= CLEAN ATTRIBUTES ================= */
+
+        cloned.querySelectorAll("*")
+        .forEach(el => {
+
+          [...el.attributes].forEach(attr => {
+
+            if (
+              attr.name.startsWith("on")
+            ) {
+
+              el.removeAttribute(attr.name);
+            }
+          });
+        });
+
+        /* ================= EXTRACT CLEAN HTML ================= */
+
+        let sourceCode =
+          getHTMLFromDOM(cloned);
+
+        return (
+          "<html>\\n" +
+          sourceCode +
+          "\\n</html>"
+        );
       });
 
     fs.writeFileSync(
@@ -319,7 +367,9 @@ async function decryptHTML(inputPath, outputPath) {
       fs.unlinkSync(tempPath);
     }
 
-  } finally {
+  }
+
+  finally {
 
     await browser.close();
   }
@@ -329,128 +379,146 @@ async function decryptHTML(inputPath, outputPath) {
 
 app.get("/", (req, res) => {
 
-  res.send("SHADOWDECRYPT BOT ONLINE");
+  res.send(
+    "SHADOWDECRYPT BOT ONLINE"
+  );
 });
 
 /* ================= WEBHOOK ================= */
 
-app.post("/webhook", async (req, res) => {
+app.post(
+  "/webhook",
+  async (req, res) => {
 
-  try {
+    try {
 
-    const message =
-      req.body.message;
+      const message =
+        req.body.message;
 
-    if (!message) {
-      return res.sendStatus(200);
-    }
+      if (!message) {
 
-    const chatId =
-      message.chat.id;
+        return res.sendStatus(200);
+      }
 
-    /* ===== START ===== */
+      const chatId =
+        message.chat.id;
 
-    if (message.text === "/start") {
+      /* ===== START ===== */
+
+      if (
+        message.text === "/start"
+      ) {
+
+        await sendMessage(
+          chatId,
+          "🔥 SHADOWDECRYPT BOT ONLINE\n\nSend encrypted HTML file."
+        );
+
+        return res.sendStatus(200);
+      }
+
+      /* ===== REQUIRE DOCUMENT ===== */
+
+      if (!message.document) {
+
+        await sendMessage(
+          chatId,
+          "📄 Please send HTML file."
+        );
+
+        return res.sendStatus(200);
+      }
+
+      const fileId =
+        message.document.file_id;
+
+      const fileName =
+        message.document.file_name ||
+        "file.html";
+
+      const ext =
+        path.extname(fileName)
+        .toLowerCase();
+
+      if (
+        ext !== ".html" &&
+        ext !== ".htm"
+      ) {
+
+        await sendMessage(
+          chatId,
+          "❌ Only HTML files allowed."
+        );
+
+        return res.sendStatus(200);
+      }
+
+      const inputPath =
+        `downloads/${Date.now()}_${fileName}`;
+
+      const outputPath =
+        `output/decrypted_${Date.now()}_${fileName}`;
+
+      /* ===== DOWNLOAD ===== */
 
       await sendMessage(
         chatId,
-        "🔥 SHADOWDECRYPT BOT ONLINE\\n\\nSend encrypted HTML file."
+        "📥 Downloading HTML..."
       );
 
-      return res.sendStatus(200);
-    }
+      await downloadTelegramFile(
+        fileId,
+        inputPath
+      );
 
-    /* ===== REQUIRE FILE ===== */
-
-    if (!message.document) {
+      /* ===== DECRYPT ===== */
 
       await sendMessage(
         chatId,
-        "📄 Please send HTML file."
+        "⚡ Executing & decrypting..."
       );
 
-      return res.sendStatus(200);
-    }
+      await decryptHTML(
+        inputPath,
+        outputPath
+      );
 
-    const fileId =
-      message.document.file_id;
+      /* ===== SEND RESULT ===== */
 
-    const fileName =
-      message.document.file_name || "file.html";
-
-    const ext =
-      path.extname(fileName).toLowerCase();
-
-    if (
-      ext !== ".html" &&
-      ext !== ".htm"
-    ) {
-
-      await sendMessage(
+      await sendDocument(
         chatId,
-        "❌ Only HTML files allowed."
+        outputPath,
+        "✅ HTML Decrypted Successfully"
       );
 
+      /* ===== CLEANUP ===== */
+
+      if (
+        fs.existsSync(inputPath)
+      ) {
+
+        fs.unlinkSync(inputPath);
+      }
+
+      if (
+        fs.existsSync(outputPath)
+      ) {
+
+        fs.unlinkSync(outputPath);
+      }
+
       return res.sendStatus(200);
+
     }
 
-    const inputPath =
-      `downloads/${Date.now()}_${fileName}`;
+    catch (err) {
 
-    const outputPath =
-      `output/decrypted_${Date.now()}_${fileName}`;
+      console.log(err);
 
-    /* ===== DOWNLOAD ===== */
-
-    await sendMessage(
-      chatId,
-      "📥 Downloading HTML..."
-    );
-
-    await downloadTelegramFile(
-      fileId,
-      inputPath
-    );
-
-    /* ===== DECRYPT ===== */
-
-    await sendMessage(
-      chatId,
-      "⚡ Decrypting HTML..."
-    );
-
-    await decryptHTML(
-      inputPath,
-      outputPath
-    );
-
-    /* ===== SEND RESULT ===== */
-
-    await sendDocument(
-      chatId,
-      outputPath,
-      "✅ HTML Decrypted Successfully"
-    );
-
-    /* ===== CLEANUP ===== */
-
-    if (fs.existsSync(inputPath)) {
-      fs.unlinkSync(inputPath);
+      return res.sendStatus(500);
     }
-
-    if (fs.existsSync(outputPath)) {
-      fs.unlinkSync(outputPath);
-    }
-
-    return res.sendStatus(200);
-
-  } catch (err) {
-
-    console.log(err);
-
-    return res.sendStatus(500);
   }
-});
+);
 
 /* ================= START SERVER ================= */
 
@@ -459,5 +527,7 @@ const PORT =
 
 app.listen(PORT, () => {
 
-  console.log(`Server running on port ${PORT}`);
+  console.log(
+    `Server running on port ${PORT}`
+  );
 });
