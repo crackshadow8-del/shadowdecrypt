@@ -15,14 +15,18 @@ app.use(express.json({
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
+if (!BOT_TOKEN) {
+  console.log("BOT_TOKEN missing");
+  process.exit(1);
+}
+
 const API =
   `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 const DOWNLOAD_DIR = "downloads";
-
 const OUTPUT_DIR = "output";
 
-/* ================= CREATE FOLDERS ================= */
+/* ================= FOLDERS ================= */
 
 if (!fs.existsSync(DOWNLOAD_DIR)) {
   fs.mkdirSync(DOWNLOAD_DIR);
@@ -144,25 +148,125 @@ setTimeout(() => {
 
 function cleanHTML(html) {
 
-  // remove ONLY our injected script
+  // remove injected wait script
   html = html.replace(
-    /<script>[\s\S]*?__SHADOW_READY__[\s\S]*?<\/script>/gi,
+    /<script>[\\s\\S]*?__SHADOW_READY__[\\s\\S]*?<\\/script>/gi,
     ""
   );
 
-  // remove analytics scripts only
+  // remove analytics only
   html = html.replace(
-    /<script[^>]*src="[^"]*(analytics|tracker|googletagmanager)[^"]*"[^>]*><\/script>/gi,
+    /<script[^>]*src="[^"]*(analytics|tracker|googletagmanager)[^"]*"[^>]*><\\/script>/gi,
     ""
   );
 
   // remove hidden iframes only
   html = html.replace(
-    /<iframe[^>]*(display\s*:\s*none|visibility\s*:\s*hidden)[^>]*>[\s\S]*?<\/iframe>/gi,
+    /<iframe[^>]*(display\\s*:\\s*none|visibility\\s*:\\s*hidden)[^>]*>[\\s\\S]*?<\\/iframe>/gi,
     ""
   );
 
   return html;
+}
+
+/* ================= EXTRACT FINAL DOM ================= */
+
+function buildExtractor() {
+
+  return `
+  (() => {
+
+    function isReadable(text) {
+
+      const cleanText =
+        text.replace(/[\\\\x00-\\\\x1F\\\\x7F]+/g, "")
+        .trim();
+
+      return !(
+        cleanText === "" ||
+        /(&#\\\\d+;)|(&#x[0-9a-f]+;)/i.test(cleanText) ||
+        /%[0-9a-f]{2}/i.test(cleanText)
+      );
+    }
+
+    function extract(node) {
+
+      let html = "";
+
+      switch (node.nodeType) {
+
+        case Node.ELEMENT_NODE:
+
+          if (
+            node.tagName &&
+            node.tagName.toLowerCase() === "script" &&
+            node.innerHTML.includes("__SHADOW_READY__")
+          ) {
+            return "";
+          }
+
+          const tag =
+            node.tagName.toLowerCase();
+
+          html += "<" + tag;
+
+          for (const attr of node.attributes) {
+
+            html +=
+              " " +
+              attr.name +
+              '="' +
+              attr.value +
+              '"';
+          }
+
+          html += ">";
+
+          for (const child of node.childNodes) {
+
+            html += extract(child);
+          }
+
+          html += "</" + tag + ">";
+
+          break;
+
+        case Node.TEXT_NODE:
+
+          if (
+            node.parentElement &&
+            node.parentElement.tagName.toLowerCase() === "script"
+          ) {
+
+            html += node.nodeValue;
+          }
+
+          else if (
+            isReadable(node.nodeValue)
+          ) {
+
+            html += node.nodeValue;
+          }
+
+          break;
+
+        case Node.COMMENT_NODE:
+
+          html +=
+            "<!--" +
+            node.nodeValue +
+            "-->";
+
+          break;
+      }
+
+      return html;
+    }
+
+    return extract(document.documentElement);
+
+  })()
+  `;
 }
 
 /* ================= DECRYPT HTML ================= */
@@ -173,9 +277,10 @@ async function decryptHTML(
 ) {
 
   const originalHTML =
-    fs.readFileSync(inputPath, "utf8");
-
-  /* inject runtime wait script */
+    fs.readFileSync(
+      inputPath,
+      "utf8"
+    );
 
   const modifiedHTML =
     originalHTML + WAIT_SCRIPT;
@@ -202,57 +307,32 @@ async function decryptHTML(
       ]
     });
 
-  let timeoutHandle;
+  let page;
 
   try {
 
-    const page =
+    page =
       await browser.newPage();
 
-    /* emergency kill */
-
-    timeoutHandle = setTimeout(
-      async () => {
-
-        try {
-          await browser.close();
-        } catch {}
-
-      },
-      120000
-    );
-
-    /* open html */
+    await page.setCacheEnabled(false);
 
     await page.goto(
       `file://${path.resolve(tempPath)}`,
       {
-        waitUntil: "domcontentloaded",
+        waitUntil: "networkidle0",
         timeout: 0
       }
     );
 
-    /* wait full runtime execution */
-
-    await page.waitForFunction(
-      () => window.__SHADOW_READY__ === true,
-      {
-        timeout: 0
-      }
+    // wait 60 sec fully
+    await new Promise(resolve =>
+      setTimeout(resolve, 60000)
     );
-
-    /* get FINAL rendered DOM */
 
     let finalHTML =
-      await page.evaluate(() => {
-
-        const cloned =
-          document.documentElement.cloneNode(true);
-
-        return cloned.outerHTML;
-      });
-
-    /* clean only injected junk */
+      await page.evaluate(
+        buildExtractor()
+      );
 
     finalHTML =
       cleanHTML(finalHTML);
@@ -267,13 +347,19 @@ async function decryptHTML(
 
   finally {
 
-    clearTimeout(timeoutHandle);
-
     try {
-      await browser.close();
+
+      if (page) {
+        await page.close();
+      }
+
     } catch {}
 
-    /* cleanup temp */
+    try {
+
+      await browser.close();
+
+    } catch {}
 
     if (fs.existsSync(tempPath)) {
       fs.unlinkSync(tempPath);
@@ -281,7 +367,7 @@ async function decryptHTML(
   }
 }
 
-/* ================= AUTO CLEANUP ================= */
+/* ================= AUTO CLEAN ================= */
 
 setInterval(() => {
 
@@ -396,16 +482,29 @@ app.post(
         return res.sendStatus(200);
       }
 
+      const uniqueId =
+        Date.now() +
+        "_" +
+        Math.random()
+        .toString(36)
+        .substring(2, 10);
+
+      const safeFileName =
+        fileName.replace(
+          /[^a-zA-Z0-9._-]/g,
+          "_"
+        );
+
       const inputPath =
         path.join(
           DOWNLOAD_DIR,
-          `${Date.now()}_${fileName}`
+          `${uniqueId}_${safeFileName}`
         );
 
       const outputPath =
         path.join(
           OUTPUT_DIR,
-          `decrypted_${Date.now()}_${fileName}`
+          `decrypted_${uniqueId}_${safeFileName}`
         );
 
       /* ================= DOWNLOAD ================= */
@@ -462,7 +561,11 @@ app.post(
 
     catch (err) {
 
-      console.log(err);
+      console.log(
+        err.response?.data ||
+        err.message ||
+        err
+      );
 
       return res.sendStatus(500);
     }
