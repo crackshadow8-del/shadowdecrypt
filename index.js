@@ -144,33 +144,21 @@ setTimeout(() => {
 
 function cleanHTML(html) {
 
-  // remove encrypted eval scripts
+  // remove ONLY our injected script
   html = html.replace(
-    /<script[^>]*>[\s\S]*?(eval\(|atob\(|unescape\(|fromCharCode|document\.write|while\(true\)|debugger)[\s\S]*?<\/script>/gi,
+    /<script>[\s\S]*?__SHADOW_READY__[\s\S]*?<\/script>/gi,
     ""
   );
 
-  // remove dean edwards packer
-  html = html.replace(
-    /<script[^>]*>[\s\S]*?function\(p,a,c,k,e,[\s\S]*?<\/script>/gi,
-    ""
-  );
-
-  // remove analytics
+  // remove analytics scripts only
   html = html.replace(
     /<script[^>]*src="[^"]*(analytics|tracker|googletagmanager)[^"]*"[^>]*><\/script>/gi,
     ""
   );
 
-  // remove hidden iframes
+  // remove hidden iframes only
   html = html.replace(
     /<iframe[^>]*(display\s*:\s*none|visibility\s*:\s*hidden)[^>]*>[\s\S]*?<\/iframe>/gi,
-    ""
-  );
-
-  // remove inline events
-  html = html.replace(
-    /\son[a-z]+="[^"]*"/gi,
     ""
   );
 
@@ -186,6 +174,8 @@ async function decryptHTML(
 
   const originalHTML =
     fs.readFileSync(inputPath, "utf8");
+
+  /* inject runtime wait script */
 
   const modifiedHTML =
     originalHTML + WAIT_SCRIPT;
@@ -219,6 +209,8 @@ async function decryptHTML(
     const page =
       await browser.newPage();
 
+    /* emergency kill */
+
     timeoutHandle = setTimeout(
       async () => {
 
@@ -230,7 +222,7 @@ async function decryptHTML(
       120000
     );
 
-    /* ================= LOAD PAGE ================= */
+    /* open html */
 
     await page.goto(
       `file://${path.resolve(tempPath)}`,
@@ -240,7 +232,7 @@ async function decryptHTML(
       }
     );
 
-    /* ================= WAIT 60 SEC ================= */
+    /* wait full runtime execution */
 
     await page.waitForFunction(
       () => window.__SHADOW_READY__ === true,
@@ -249,7 +241,7 @@ async function decryptHTML(
       }
     );
 
-    /* ================= GET FINAL DOM ================= */
+    /* get FINAL rendered DOM */
 
     let finalHTML =
       await page.evaluate(() => {
@@ -257,26 +249,10 @@ async function decryptHTML(
         const cloned =
           document.documentElement.cloneNode(true);
 
-        /* REMOVE INTERNAL WAIT SCRIPT */
-
-        cloned
-          .querySelectorAll("script")
-          .forEach(script => {
-
-            if (
-              script.innerHTML.includes(
-                "__SHADOW_READY__"
-              )
-            ) {
-
-              script.remove();
-            }
-          });
-
         return cloned.outerHTML;
       });
 
-    /* ================= CLEAN OUTPUT ================= */
+    /* clean only injected junk */
 
     finalHTML =
       cleanHTML(finalHTML);
@@ -296,6 +272,8 @@ async function decryptHTML(
     try {
       await browser.close();
     } catch {}
+
+    /* cleanup temp */
 
     if (fs.existsSync(tempPath)) {
       fs.unlinkSync(tempPath);
