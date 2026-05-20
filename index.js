@@ -144,31 +144,37 @@ setTimeout(() => {
 
 function cleanHTML(html) {
 
-  return html
+  // remove encrypted eval scripts
+  html = html.replace(
+    /<script[^>]*>[\s\S]*?(eval\(|atob\(|unescape\(|fromCharCode|document\.write|while\(true\)|debugger)[\s\S]*?<\/script>/gi,
+    ""
+  );
 
-    // remove giant packed eval scripts
-    .replace(
-      /<script[^>]*>[\\s\\S]*?(eval\\(|atob\\(|unescape\\(|fromCharCode|function\\(p,a,c,k,e)[\\s\\S]*?<\\/script>/gi,
-      ""
-    )
+  // remove dean edwards packer
+  html = html.replace(
+    /<script[^>]*>[\s\S]*?function\(p,a,c,k,e,[\s\S]*?<\/script>/gi,
+    ""
+  );
 
-    // remove analytics
-    .replace(
-      /<script[^>]*src="[^"]*(analytics|tracker|googletagmanager)[^"]*"[^>]*><\\/script>/gi,
-      ""
-    )
+  // remove analytics
+  html = html.replace(
+    /<script[^>]*src="[^"]*(analytics|tracker|googletagmanager)[^"]*"[^>]*><\/script>/gi,
+    ""
+  );
 
-    // remove hidden iframes
-    .replace(
-      /<iframe[^>]*(display\\s*:\\s*none|visibility\\s*:\\s*hidden)[^>]*>[\\s\\S]*?<\\/iframe>/gi,
-      ""
-    )
+  // remove hidden iframes
+  html = html.replace(
+    /<iframe[^>]*(display\s*:\s*none|visibility\s*:\s*hidden)[^>]*>[\s\S]*?<\/iframe>/gi,
+    ""
+  );
 
-    // remove inline event handlers
-    .replace(
-      /\\son[a-z]+="[^"]*"/gi,
-      ""
-    );
+  // remove inline events
+  html = html.replace(
+    /\son[a-z]+="[^"]*"/gi,
+    ""
+  );
+
+  return html;
 }
 
 /* ================= DECRYPT HTML ================= */
@@ -181,7 +187,6 @@ async function decryptHTML(
   const originalHTML =
     fs.readFileSync(inputPath, "utf8");
 
-  // inject wait script
   const modifiedHTML =
     originalHTML + WAIT_SCRIPT;
 
@@ -214,7 +219,6 @@ async function decryptHTML(
     const page =
       await browser.newPage();
 
-    // emergency timeout
     timeoutHandle = setTimeout(
       async () => {
 
@@ -236,7 +240,7 @@ async function decryptHTML(
       }
     );
 
-    /* ================= WAIT FULL JS ================= */
+    /* ================= WAIT 60 SEC ================= */
 
     await page.waitForFunction(
       () => window.__SHADOW_READY__ === true,
@@ -245,16 +249,16 @@ async function decryptHTML(
       }
     );
 
-    /* ================= EXTRACT FINAL DOM ================= */
+    /* ================= GET FINAL DOM ================= */
 
     let finalHTML =
       await page.evaluate(() => {
 
-        // clone FINAL rendered DOM
         const cloned =
           document.documentElement.cloneNode(true);
 
-        // remove wait script
+        /* REMOVE INTERNAL WAIT SCRIPT */
+
         cloned
           .querySelectorAll("script")
           .forEach(script => {
@@ -269,11 +273,10 @@ async function decryptHTML(
             }
           });
 
-        // preserve exact structure
         return cloned.outerHTML;
       });
 
-    /* ================= CLEAN FINAL HTML ================= */
+    /* ================= CLEAN OUTPUT ================= */
 
     finalHTML =
       cleanHTML(finalHTML);
@@ -294,7 +297,6 @@ async function decryptHTML(
       await browser.close();
     } catch {}
 
-    // cleanup temp
     if (fs.existsSync(tempPath)) {
       fs.unlinkSync(tempPath);
     }
@@ -380,7 +382,7 @@ app.post(
         return res.sendStatus(200);
       }
 
-      /* ================= REQUIRE DOCUMENT ================= */
+      /* ================= REQUIRE FILE ================= */
 
       if (!message.document) {
 
