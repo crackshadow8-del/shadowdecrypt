@@ -125,11 +125,12 @@ window.__SHADOW_READY__ = false;
 
 (function() {
 
+    // WAIT 60 SECONDS
     setTimeout(() => {
 
         window.__SHADOW_READY__ = true;
 
-    }, 12000);
+    }, 60000);
 
 })();
 </script>
@@ -175,15 +176,17 @@ async function decryptHTML(
     const page =
       await browser.newPage();
 
+    /* ================= LOAD PAGE ================= */
+
     await page.goto(
       `file://${path.resolve(tempPath)}`,
       {
-        waitUntil: "networkidle2",
+        waitUntil: "domcontentloaded",
         timeout: 0
       }
     );
 
-    // WAIT FOR FULL JS EXECUTION
+    /* ================= WAIT FULL EXECUTION ================= */
 
     await page.waitForFunction(
       () => window.__SHADOW_READY__ === true,
@@ -191,6 +194,8 @@ async function decryptHTML(
         timeout: 0
       }
     );
+
+    /* ================= EXTRACT FINAL HTML ================= */
 
     const finalHTML =
       await page.evaluate(() => {
@@ -278,74 +283,80 @@ async function decryptHTML(
 
         /* ================= REMOVE ENCRYPTED SCRIPTS ================= */
 
-        cloned.querySelectorAll("script")
-        .forEach(script => {
+        cloned
+          .querySelectorAll("script")
+          .forEach(script => {
 
-          const code =
-            (script.innerHTML || "")
-            .toLowerCase();
+            const code =
+              (script.innerHTML || "")
+              .toLowerCase();
 
-          const src =
-            (script.src || "")
-            .toLowerCase();
-
-          if (
-
-            code.includes("eval(") ||
-            code.includes("atob(") ||
-            code.includes("unescape(") ||
-            code.includes("fromcharcode") ||
-            code.includes("document.write") ||
-            code.includes("function(p,a,c,k,e") ||
-            code.includes("while(true)") ||
-            code.includes("debugger") ||
-            code.length > 8000 ||
-
-            src.includes("analytics") ||
-            src.includes("tracker") ||
-            src.includes("googletagmanager")
-
-          ) {
-
-            script.remove();
-          }
-        });
-
-        /* ================= REMOVE IFRAMES ================= */
-
-        cloned.querySelectorAll("iframe")
-        .forEach(frame => {
-
-          const style =
-            (frame.getAttribute("style") || "")
-            .toLowerCase();
-
-          if (
-            style.includes("display:none") ||
-            style.includes("visibility:hidden")
-          ) {
-
-            frame.remove();
-          }
-        });
-
-        /* ================= CLEAN ATTRIBUTES ================= */
-
-        cloned.querySelectorAll("*")
-        .forEach(el => {
-
-          [...el.attributes].forEach(attr => {
+            const src =
+              (script.src || "")
+              .toLowerCase();
 
             if (
-              attr.name.startsWith("on")
+
+              code.includes("eval(") ||
+              code.includes("atob(") ||
+              code.includes("unescape(") ||
+              code.includes("fromcharcode") ||
+              code.includes("document.write") ||
+              code.includes("function(p,a,c,k,e") ||
+              code.includes("while(true)") ||
+              code.includes("debugger") ||
+              code.length > 8000 ||
+
+              src.includes("analytics") ||
+              src.includes("tracker") ||
+              src.includes("googletagmanager")
+
             ) {
 
-              el.removeAttribute(attr.name);
+              script.remove();
             }
           });
-        });
 
-        /* ================= EXTRACT CLEAN HTML ================= */
+        /* ================= REMOVE HIDDEN IFRAMES ================= */
+
+        cloned
+          .querySelectorAll("iframe")
+          .forEach(frame => {
+
+            const style =
+              (
+                frame.getAttribute("style") ||
+                ""
+              ).toLowerCase();
+
+            if (
+              style.includes("display:none") ||
+              style.includes("visibility:hidden")
+            ) {
+
+              frame.remove();
+            }
+          });
+
+        /* ================= REMOVE EVENT ATTRIBUTES ================= */
+
+        cloned
+          .querySelectorAll("*")
+          .forEach(el => {
+
+            [...el.attributes]
+            .forEach(attr => {
+
+              if (
+                attr.name.startsWith("on")
+              ) {
+
+                el.removeAttribute(attr.name);
+              }
+            });
+          });
+
+        /* ================= BUILD FINAL HTML ================= */
 
         let sourceCode =
           getHTMLFromDOM(cloned);
@@ -362,6 +373,8 @@ async function decryptHTML(
       finalHTML,
       "utf8"
     );
+
+    /* ================= CLEANUP ================= */
 
     if (fs.existsSync(tempPath)) {
       fs.unlinkSync(tempPath);
@@ -403,7 +416,7 @@ app.post(
       const chatId =
         message.chat.id;
 
-      /* ===== START ===== */
+      /* ================= START ================= */
 
       if (
         message.text === "/start"
@@ -411,13 +424,13 @@ app.post(
 
         await sendMessage(
           chatId,
-          "🔥 SHADOWDECRYPT BOT ONLINE\n\nSend encrypted HTML file."
+          "🔥 SHADOWDECRYPT BOT ONLINE\\n\\nSend encrypted HTML file."
         );
 
         return res.sendStatus(200);
       }
 
-      /* ===== REQUIRE DOCUMENT ===== */
+      /* ================= REQUIRE FILE ================= */
 
       if (!message.document) {
 
@@ -459,7 +472,7 @@ app.post(
       const outputPath =
         `output/decrypted_${Date.now()}_${fileName}`;
 
-      /* ===== DOWNLOAD ===== */
+      /* ================= DOWNLOAD ================= */
 
       await sendMessage(
         chatId,
@@ -471,11 +484,11 @@ app.post(
         inputPath
       );
 
-      /* ===== DECRYPT ===== */
+      /* ================= DECRYPT ================= */
 
       await sendMessage(
         chatId,
-        "⚡ Executing & decrypting..."
+        "⚡ Executing JavaScript & decrypting...\\n⏳ This may take up to 60 seconds."
       );
 
       await decryptHTML(
@@ -483,7 +496,7 @@ app.post(
         outputPath
       );
 
-      /* ===== SEND RESULT ===== */
+      /* ================= SEND RESULT ================= */
 
       await sendDocument(
         chatId,
@@ -491,7 +504,7 @@ app.post(
         "✅ HTML Decrypted Successfully"
       );
 
-      /* ===== CLEANUP ===== */
+      /* ================= CLEANUP ================= */
 
       if (
         fs.existsSync(inputPath)
