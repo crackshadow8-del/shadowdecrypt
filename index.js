@@ -26,7 +26,7 @@ const API =
 const DOWNLOAD_DIR = "downloads";
 const OUTPUT_DIR = "output";
 
-/* ================= CREATE FOLDERS ================= */
+/* ================= FOLDERS ================= */
 
 if (!fs.existsSync(DOWNLOAD_DIR)) {
   fs.mkdirSync(DOWNLOAD_DIR);
@@ -35,6 +35,10 @@ if (!fs.existsSync(DOWNLOAD_DIR)) {
 if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR);
 }
+
+/* ================= GLOBAL PROCESS LOCK ================= */
+
+let processing = false;
 
 /* ================= SEND MESSAGE ================= */
 
@@ -150,26 +154,14 @@ function cleanHTML(html) {
 
   // remove injected wait script
   html = html.replace(
-    /<script>[\s\S]*?__SHADOW_READY__[\s\S]*?<\/script>/gi,
-    ""
-  );
-
-  // remove analytics scripts only
-  html = html.replace(
-    /<script[^>]*src="[^"]*(analytics|tracker|googletagmanager)[^"]*"[^>]*><\/script>/gi,
-    ""
-  );
-
-  // remove hidden iframes only
-  html = html.replace(
-    /<iframe[^>]*(display\s*:\s*none|visibility\s*:\s*hidden)[^>]*>[\s\S]*?<\/iframe>/gi,
+    /<script>[\\s\\S]*?__SHADOW_READY__[\\s\\S]*?<\\/script>/gi,
     ""
   );
 
   return html;
 }
 
-/* ================= DOM EXTRACTOR ================= */
+/* ================= EXTRACTOR ================= */
 
 function buildExtractor() {
 
@@ -269,7 +261,7 @@ function buildExtractor() {
   `;
 }
 
-/* ================= DECRYPT HTML ================= */
+/* ================= DECRYPT ================= */
 
 async function decryptHTML(
   inputPath,
@@ -324,7 +316,7 @@ async function decryptHTML(
       }
     );
 
-    // wait full JS execution
+    // wait full execution
     await new Promise(resolve =>
       setTimeout(resolve, 60000)
     );
@@ -367,43 +359,6 @@ async function decryptHTML(
   }
 }
 
-/* ================= AUTO CLEANUP ================= */
-
-setInterval(() => {
-
-  try {
-
-    const folders = [
-      DOWNLOAD_DIR,
-      OUTPUT_DIR
-    ];
-
-    folders.forEach(folder => {
-
-      fs.readdirSync(folder)
-      .forEach(file => {
-
-        const filePath =
-          path.join(folder, file);
-
-        const stats =
-          fs.statSync(filePath);
-
-        const age =
-          Date.now() - stats.mtimeMs;
-
-        // delete after 30 mins
-        if (age > 1800000) {
-
-          fs.unlinkSync(filePath);
-        }
-      });
-    });
-
-  } catch {}
-
-}, 600000);
-
 /* ================= HOME ================= */
 
 app.get("/", (req, res) => {
@@ -419,15 +374,15 @@ app.post(
   "/webhook",
   async (req, res) => {
 
+    // respond FAST to telegram
+    res.sendStatus(200);
+
     try {
 
       const message =
         req.body.message;
 
-      if (!message) {
-
-        return res.sendStatus(200);
-      }
+      if (!message) return;
 
       const chatId =
         message.chat.id;
@@ -443,7 +398,7 @@ app.post(
           "🔥 SHADOWDECRYPT BOT ONLINE\n\nSend encrypted HTML file."
         );
 
-        return res.sendStatus(200);
+        return;
       }
 
       /* ================= REQUIRE FILE ================= */
@@ -455,124 +410,145 @@ app.post(
           "📄 Please send HTML file."
         );
 
-        return res.sendStatus(200);
+        return;
       }
 
-      const fileId =
-        message.document.file_id;
+      /* ================= BLOCK MULTIPLE ================= */
 
-      const fileName =
-        message.document.file_name ||
-        "file.html";
-
-      const ext =
-        path.extname(fileName)
-        .toLowerCase();
-
-      if (
-        ext !== ".html" &&
-        ext !== ".htm"
-      ) {
+      if (processing) {
 
         await sendMessage(
           chatId,
-          "❌ Only HTML files allowed."
+          "⏳ Another file is processing.\nPlease wait..."
         );
 
-        return res.sendStatus(200);
+        return;
       }
 
-      const uniqueId =
-        Date.now() +
-        "_" +
-        Math.random()
-        .toString(36)
-        .substring(2, 10);
+      processing = true;
 
-      const safeFileName =
-        fileName.replace(
-          /[^a-zA-Z0-9._-]/g,
-          "_"
+      try {
+
+        const fileId =
+          message.document.file_id;
+
+        const fileName =
+          message.document.file_name ||
+          "file.html";
+
+        const ext =
+          path.extname(fileName)
+          .toLowerCase();
+
+        if (
+          ext !== ".html" &&
+          ext !== ".htm"
+        ) {
+
+          await sendMessage(
+            chatId,
+            "❌ Only HTML files allowed."
+          );
+
+          return;
+        }
+
+        const uniqueId =
+          Date.now() +
+          "_" +
+          Math.random()
+          .toString(36)
+          .substring(2, 10);
+
+        const safeFileName =
+          fileName.replace(
+            /[^a-zA-Z0-9._-]/g,
+            "_"
+          );
+
+        const inputPath =
+          path.join(
+            DOWNLOAD_DIR,
+            `${uniqueId}_${safeFileName}`
+          );
+
+        const outputPath =
+          path.join(
+            OUTPUT_DIR,
+            `decrypted_${uniqueId}_${safeFileName}`
+          );
+
+        /* ================= DOWNLOAD ================= */
+
+        await sendMessage(
+          chatId,
+          "📥 Downloading HTML..."
         );
 
-      const inputPath =
-        path.join(
-          DOWNLOAD_DIR,
-          `${uniqueId}_${safeFileName}`
+        await downloadTelegramFile(
+          fileId,
+          inputPath
         );
 
-      const outputPath =
-        path.join(
-          OUTPUT_DIR,
-          `decrypted_${uniqueId}_${safeFileName}`
+        /* ================= DECRYPT ================= */
+
+        await sendMessage(
+          chatId,
+          "⚡ Executing JavaScript & decrypting...\n⏳ This may take up to 60 seconds."
         );
 
-      /* ================= DOWNLOAD ================= */
+        await decryptHTML(
+          inputPath,
+          outputPath
+        );
 
-      await sendMessage(
-        chatId,
-        "📥 Downloading HTML..."
-      );
+        /* ================= SEND FILE ================= */
 
-      await downloadTelegramFile(
-        fileId,
-        inputPath
-      );
+        await sendDocument(
+          chatId,
+          outputPath,
+          "✅ HTML Decrypted Successfully"
+        );
 
-      /* ================= DECRYPT ================= */
+        /* ================= CLEANUP ================= */
 
-      await sendMessage(
-        chatId,
-        "⚡ Executing JavaScript & decrypting...\n⏳ This may take up to 60 seconds."
-      );
+        if (
+          fs.existsSync(inputPath)
+        ) {
 
-      await decryptHTML(
-        inputPath,
-        outputPath
-      );
+          fs.unlinkSync(inputPath);
+        }
 
-      /* ================= SEND RESULT ================= */
+        if (
+          fs.existsSync(outputPath)
+        ) {
 
-      await sendDocument(
-        chatId,
-        outputPath,
-        "✅ HTML Decrypted Successfully"
-      );
+          fs.unlinkSync(outputPath);
+        }
 
-      /* ================= CLEANUP ================= */
-
-      if (
-        fs.existsSync(inputPath)
-      ) {
-
-        fs.unlinkSync(inputPath);
       }
 
-      if (
-        fs.existsSync(outputPath)
-      ) {
+      finally {
 
-        fs.unlinkSync(outputPath);
+        processing = false;
       }
-
-      return res.sendStatus(200);
 
     }
 
     catch (err) {
+
+      processing = false;
 
       console.log(
         err.response?.data ||
         err.message ||
         err
       );
-
-      return res.sendStatus(500);
     }
   }
 );
 
-/* ================= START SERVER ================= */
+/* ================= START ================= */
 
 const PORT =
   process.env.PORT || 3000;
