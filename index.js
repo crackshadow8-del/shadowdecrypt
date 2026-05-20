@@ -11,17 +11,25 @@ app.use(express.json({
   limit: "50mb"
 }));
 
+/* ================= CONFIG ================= */
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const API =
   `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-if (!fs.existsSync("downloads")) {
-  fs.mkdirSync("downloads");
+const DOWNLOAD_DIR = "downloads";
+
+const OUTPUT_DIR = "output";
+
+/* ================= CREATE FOLDERS ================= */
+
+if (!fs.existsSync(DOWNLOAD_DIR)) {
+  fs.mkdirSync(DOWNLOAD_DIR);
 }
 
-if (!fs.existsSync("output")) {
-  fs.mkdirSync("output");
+if (!fs.existsSync(OUTPUT_DIR)) {
+  fs.mkdirSync(OUTPUT_DIR);
 }
 
 /* ================= SEND MESSAGE ================= */
@@ -116,25 +124,52 @@ async function downloadTelegramFile(
   });
 }
 
-/* ================= INJECTED SCRIPT ================= */
+/* ================= WAIT SCRIPT ================= */
 
-const DECRYPT_SCRIPT = `
+const WAIT_SCRIPT = `
 <script>
 
 window.__SHADOW_READY__ = false;
 
-(function() {
+setTimeout(() => {
 
-    // WAIT 60 SECONDS
-    setTimeout(() => {
+  window.__SHADOW_READY__ = true;
 
-        window.__SHADOW_READY__ = true;
+}, 60000);
 
-    }, 60000);
-
-})();
 </script>
 `;
+
+/* ================= CLEAN HTML ================= */
+
+function cleanHTML(html) {
+
+  return html
+
+    // remove giant packed eval scripts
+    .replace(
+      /<script[^>]*>[\\s\\S]*?(eval\\(|atob\\(|unescape\\(|fromCharCode|function\\(p,a,c,k,e)[\\s\\S]*?<\\/script>/gi,
+      ""
+    )
+
+    // remove analytics
+    .replace(
+      /<script[^>]*src="[^"]*(analytics|tracker|googletagmanager)[^"]*"[^>]*><\\/script>/gi,
+      ""
+    )
+
+    // remove hidden iframes
+    .replace(
+      /<iframe[^>]*(display\\s*:\\s*none|visibility\\s*:\\s*hidden)[^>]*>[\\s\\S]*?<\\/iframe>/gi,
+      ""
+    )
+
+    // remove inline event handlers
+    .replace(
+      /\\son[a-z]+="[^"]*"/gi,
+      ""
+    );
+}
 
 /* ================= DECRYPT HTML ================= */
 
@@ -146,11 +181,12 @@ async function decryptHTML(
   const originalHTML =
     fs.readFileSync(inputPath, "utf8");
 
+  // inject wait script
   const modifiedHTML =
-    originalHTML + DECRYPT_SCRIPT;
+    originalHTML + WAIT_SCRIPT;
 
   const tempPath =
-    inputPath + "_modified.html";
+    inputPath + "_runtime.html";
 
   fs.writeFileSync(
     tempPath,
@@ -171,10 +207,24 @@ async function decryptHTML(
       ]
     });
 
+  let timeoutHandle;
+
   try {
 
     const page =
       await browser.newPage();
+
+    // emergency timeout
+    timeoutHandle = setTimeout(
+      async () => {
+
+        try {
+          await browser.close();
+        } catch {}
+
+      },
+      120000
+    );
 
     /* ================= LOAD PAGE ================= */
 
@@ -186,7 +236,7 @@ async function decryptHTML(
       }
     );
 
-    /* ================= WAIT FULL EXECUTION ================= */
+    /* ================= WAIT FULL JS ================= */
 
     await page.waitForFunction(
       () => window.__SHADOW_READY__ === true,
@@ -195,178 +245,38 @@ async function decryptHTML(
       }
     );
 
-    /* ================= EXTRACT FINAL HTML ================= */
+    /* ================= EXTRACT FINAL DOM ================= */
 
-    const finalHTML =
+    let finalHTML =
       await page.evaluate(() => {
 
-        function isReadable(text) {
-
-          const cleanText =
-            text.replace(
-              /[\x00-\x1F\x7F]+/g,
-              ""
-            ).trim();
-
-          return !(
-            cleanText === "" ||
-            /(&#\d+;)|(&#x[0-9a-f]+;)/i.test(cleanText) ||
-            /%[0-9a-f]{2}/i.test(cleanText)
-          );
-        }
-
-        function getHTMLFromDOM(node) {
-
-          let html = "";
-
-          switch (node.nodeType) {
-
-            case Node.ELEMENT_NODE:
-
-              let tag =
-                node.tagName.toLowerCase();
-
-              html += "<" + tag;
-
-              for (let attr of node.attributes) {
-
-                html +=
-                  ` ${attr.name}="${attr.value}"`;
-              }
-
-              html += ">";
-
-              for (let child of node.childNodes) {
-
-                html +=
-                  getHTMLFromDOM(child);
-              }
-
-              html += `</${tag}>`;
-
-              break;
-
-            case Node.TEXT_NODE:
-
-              if (
-                node.parentElement &&
-                node.parentElement.tagName.toLowerCase() === "script"
-              ) {
-
-                html += node.nodeValue;
-              }
-
-              else if (
-                isReadable(node.nodeValue)
-              ) {
-
-                html += node.nodeValue;
-              }
-
-              break;
-
-            case Node.COMMENT_NODE:
-
-              html +=
-                `<!--${node.nodeValue}-->`;
-
-              break;
-          }
-
-          return html;
-        }
-
-        /* ================= CLONE FINAL DOM ================= */
-
+        // clone FINAL rendered DOM
         const cloned =
           document.documentElement.cloneNode(true);
 
-        /* ================= REMOVE ENCRYPTED SCRIPTS ================= */
-
+        // remove wait script
         cloned
           .querySelectorAll("script")
           .forEach(script => {
 
-            const code =
-              (script.innerHTML || "")
-              .toLowerCase();
-
-            const src =
-              (script.src || "")
-              .toLowerCase();
-
             if (
-
-              code.includes("eval(") ||
-              code.includes("atob(") ||
-              code.includes("unescape(") ||
-              code.includes("fromcharcode") ||
-              code.includes("document.write") ||
-              code.includes("function(p,a,c,k,e") ||
-              code.includes("while(true)") ||
-              code.includes("debugger") ||
-              code.length > 8000 ||
-
-              src.includes("analytics") ||
-              src.includes("tracker") ||
-              src.includes("googletagmanager")
-
+              script.innerHTML.includes(
+                "__SHADOW_READY__"
+              )
             ) {
 
               script.remove();
             }
           });
 
-        /* ================= REMOVE HIDDEN IFRAMES ================= */
-
-        cloned
-          .querySelectorAll("iframe")
-          .forEach(frame => {
-
-            const style =
-              (
-                frame.getAttribute("style") ||
-                ""
-              ).toLowerCase();
-
-            if (
-              style.includes("display:none") ||
-              style.includes("visibility:hidden")
-            ) {
-
-              frame.remove();
-            }
-          });
-
-        /* ================= REMOVE EVENT ATTRIBUTES ================= */
-
-        cloned
-          .querySelectorAll("*")
-          .forEach(el => {
-
-            [...el.attributes]
-            .forEach(attr => {
-
-              if (
-                attr.name.startsWith("on")
-              ) {
-
-                el.removeAttribute(attr.name);
-              }
-            });
-          });
-
-        /* ================= BUILD FINAL HTML ================= */
-
-        let sourceCode =
-          getHTMLFromDOM(cloned);
-
-        return (
-          "<html>\\n" +
-          sourceCode +
-          "\\n</html>"
-        );
+        // preserve exact structure
+        return cloned.outerHTML;
       });
+
+    /* ================= CLEAN FINAL HTML ================= */
+
+    finalHTML =
+      cleanHTML(finalHTML);
 
     fs.writeFileSync(
       outputPath,
@@ -374,19 +284,59 @@ async function decryptHTML(
       "utf8"
     );
 
-    /* ================= CLEANUP ================= */
-
-    if (fs.existsSync(tempPath)) {
-      fs.unlinkSync(tempPath);
-    }
-
   }
 
   finally {
 
-    await browser.close();
+    clearTimeout(timeoutHandle);
+
+    try {
+      await browser.close();
+    } catch {}
+
+    // cleanup temp
+    if (fs.existsSync(tempPath)) {
+      fs.unlinkSync(tempPath);
+    }
   }
 }
+
+/* ================= AUTO CLEANUP ================= */
+
+setInterval(() => {
+
+  try {
+
+    const folders = [
+      DOWNLOAD_DIR,
+      OUTPUT_DIR
+    ];
+
+    folders.forEach(folder => {
+
+      fs.readdirSync(folder)
+      .forEach(file => {
+
+        const filePath =
+          path.join(folder, file);
+
+        const stats =
+          fs.statSync(filePath);
+
+        const age =
+          Date.now() - stats.mtimeMs;
+
+        // delete after 30 mins
+        if (age > 1800000) {
+
+          fs.unlinkSync(filePath);
+        }
+      });
+    });
+
+  } catch {}
+
+}, 600000);
 
 /* ================= HOME ================= */
 
@@ -424,13 +374,13 @@ app.post(
 
         await sendMessage(
           chatId,
-          "🔥 SHADOWDECRYPT BOT ONLINE\\n\\nSend encrypted HTML file."
+          "🔥 SHADOWDECRYPT BOT ONLINE\n\nSend encrypted HTML file."
         );
 
         return res.sendStatus(200);
       }
 
-      /* ================= REQUIRE FILE ================= */
+      /* ================= REQUIRE DOCUMENT ================= */
 
       if (!message.document) {
 
@@ -467,10 +417,16 @@ app.post(
       }
 
       const inputPath =
-        `downloads/${Date.now()}_${fileName}`;
+        path.join(
+          DOWNLOAD_DIR,
+          `${Date.now()}_${fileName}`
+        );
 
       const outputPath =
-        `output/decrypted_${Date.now()}_${fileName}`;
+        path.join(
+          OUTPUT_DIR,
+          `decrypted_${Date.now()}_${fileName}`
+        );
 
       /* ================= DOWNLOAD ================= */
 
@@ -488,7 +444,7 @@ app.post(
 
       await sendMessage(
         chatId,
-        "⚡ Executing JavaScript & decrypting...\\n⏳ This may take up to 60 seconds."
+        "⚡ Executing JavaScript & decrypting...\n⏳ This may take up to 60 seconds."
       );
 
       await decryptHTML(
