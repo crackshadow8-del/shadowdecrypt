@@ -26,7 +26,7 @@ const API =
 const DOWNLOAD_DIR = "downloads";
 const OUTPUT_DIR = "output";
 
-/* ================= FOLDERS ================= */
+/* ================= CREATE FOLDERS ================= */
 
 if (!fs.existsSync(DOWNLOAD_DIR)) {
   fs.mkdirSync(DOWNLOAD_DIR);
@@ -150,26 +150,26 @@ function cleanHTML(html) {
 
   // remove injected wait script
   html = html.replace(
-    /<script>[\\s\\S]*?__SHADOW_READY__[\\s\\S]*?<\\/script>/gi,
+    /<script>[\s\S]*?__SHADOW_READY__[\s\S]*?<\/script>/gi,
     ""
   );
 
-  // remove analytics only
+  // remove analytics scripts only
   html = html.replace(
-    /<script[^>]*src="[^"]*(analytics|tracker|googletagmanager)[^"]*"[^>]*><\\/script>/gi,
+    /<script[^>]*src="[^"]*(analytics|tracker|googletagmanager)[^"]*"[^>]*><\/script>/gi,
     ""
   );
 
   // remove hidden iframes only
   html = html.replace(
-    /<iframe[^>]*(display\\s*:\\s*none|visibility\\s*:\\s*hidden)[^>]*>[\\s\\S]*?<\\/iframe>/gi,
+    /<iframe[^>]*(display\s*:\s*none|visibility\s*:\s*hidden)[^>]*>[\s\S]*?<\/iframe>/gi,
     ""
   );
 
   return html;
 }
 
-/* ================= EXTRACT FINAL DOM ================= */
+/* ================= DOM EXTRACTOR ================= */
 
 function buildExtractor() {
 
@@ -324,7 +324,7 @@ async function decryptHTML(
       }
     );
 
-    // wait 60 sec fully
+    // wait full JS execution
     await new Promise(resolve =>
       setTimeout(resolve, 60000)
     );
@@ -367,7 +367,7 @@ async function decryptHTML(
   }
 }
 
-/* ================= AUTO CLEAN ================= */
+/* ================= AUTO CLEANUP ================= */
 
 setInterval(() => {
 
