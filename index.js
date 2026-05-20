@@ -4,40 +4,24 @@ const path = require("path");
 const axios = require("axios");
 const FormData = require("form-data");
 const puppeteer = require("puppeteer");
+
 const app = express();
 
 app.use(express.json({
   limit: "50mb"
 }));
 
-/* ================= CONFIG ================= */
-
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
-if (!BOT_TOKEN) {
-  console.log("BOT_TOKEN missing");
-  process.exit(1);
+const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
+if (!fs.existsSync("downloads")) {
+  fs.mkdirSync("downloads");
 }
 
-const API =
-  `https://api.telegram.org/bot${BOT_TOKEN}`;
-
-const DOWNLOAD_DIR = "downloads";
-const OUTPUT_DIR = "output";
-
-/* ================= FOLDERS ================= */
-
-if (!fs.existsSync(DOWNLOAD_DIR)) {
-  fs.mkdirSync(DOWNLOAD_DIR);
+if (!fs.existsSync("output")) {
+  fs.mkdirSync("output");
 }
-
-if (!fs.existsSync(OUTPUT_DIR)) {
-  fs.mkdirSync(OUTPUT_DIR);
-}
-
-/* ================= GLOBAL PROCESS LOCK ================= */
-
-let processing = false;
 
 /* ================= SEND MESSAGE ================= */
 
@@ -45,31 +29,21 @@ async function sendMessage(chatId, text) {
 
   try {
 
-    await axios.post(
-      `${API}/sendMessage`,
-      {
-        chat_id: chatId,
-        text,
-        parse_mode: "HTML"
-      }
-    );
+    await axios.post(`${API}/sendMessage`, {
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML"
+    });
 
   } catch (err) {
 
-    console.log(
-      err.response?.data ||
-      err.message
-    );
+    console.log(err.response?.data || err.message);
   }
 }
 
 /* ================= SEND DOCUMENT ================= */
 
-async function sendDocument(
-  chatId,
-  filePath,
-  caption = ""
-) {
+async function sendDocument(chatId, filePath, caption = "") {
 
   const form = new FormData();
 
@@ -96,10 +70,7 @@ async function sendDocument(
 
 /* ================= DOWNLOAD FILE ================= */
 
-async function downloadTelegramFile(
-  fileId,
-  savePath
-) {
+async function downloadTelegramFile(fileId, savePath) {
 
   const res = await axios.get(
     `${API}/getFile?file_id=${fileId}`
@@ -131,153 +102,127 @@ async function downloadTelegramFile(
   });
 }
 
-/* ================= WAIT SCRIPT ================= */
+/* ================= DECRYPT SCRIPT ================= */
 
-const WAIT_SCRIPT = `
+const DECRYPT_SCRIPT = `
 <script>
-
-window.__SHADOW_READY__ = false;
-
-setTimeout(() => {
-
-  window.__SHADOW_READY__ = true;
-
-}, 60000);
-
-</script>
-`;
-
-/* ================= CLEAN HTML ================= */
-
-function cleanHTML(html) {
-
-  // remove injected wait script
-  html = html.replace(
-    /<script>[\\s\\S]*?__SHADOW_READY__[\\s\\S]*?<\\/script>/gi,
-    ""
-  );
-
-  return html;
-}
-
-/* ================= EXTRACTOR ================= */
-
-function buildExtractor() {
-
-  return `
-  (() => {
+(function() {
 
     function isReadable(text) {
 
-      const cleanText =
-        text.replace(/[\\\\x00-\\\\x1F\\\\x7F]+/g, "")
-        .trim();
+        const cleanText =
+            text.replace(/[\\\\x00-\\\\x1F\\\\x7F]+/g, '').trim();
 
-      return !(
-        cleanText === "" ||
-        /(&#\\\\d+;)|(&#x[0-9a-f]+;)/i.test(cleanText) ||
-        /%[0-9a-f]{2}/i.test(cleanText)
-      );
+        return !(
+            cleanText === "" ||
+            /(&#\\\\d+;)|(&#x[0-9a-f]+;)/i.test(cleanText) ||
+            /%[0-9a-f]{2}/i.test(cleanText)
+        );
     }
 
-    function extract(node) {
+    function getHTMLFromDOM(node) {
 
-      let html = "";
+        let html = "";
 
-      switch (node.nodeType) {
+        switch (node.nodeType) {
 
-        case Node.ELEMENT_NODE:
+            case Node.ELEMENT_NODE:
 
-          if (
-            node.tagName &&
-            node.tagName.toLowerCase() === "script" &&
-            node.innerHTML.includes("__SHADOW_READY__")
-          ) {
-            return "";
-          }
+                if (node === document.currentScript)
+                    return "";
 
-          const tag =
-            node.tagName.toLowerCase();
+                let tag =
+                    node.tagName.toLowerCase();
 
-          html += "<" + tag;
+                html += "<" + tag;
 
-          for (const attr of node.attributes) {
+                for (let attr of node.attributes) {
 
-            html +=
-              " " +
-              attr.name +
-              '="' +
-              attr.value +
-              '"';
-          }
+                    html +=
+                        " " + attr.name + "=" + "\\"" + attr.value + "\\"";
+                }
 
-          html += ">";
+                html += ">";
 
-          for (const child of node.childNodes) {
+                for (let child of node.childNodes) {
 
-            html += extract(child);
-          }
+                    html += getHTMLFromDOM(child);
+                }
 
-          html += "</" + tag + ">";
+                html += "</" + tag + ">";
 
-          break;
+                break;
 
-        case Node.TEXT_NODE:
+            case Node.TEXT_NODE:
 
-          if (
-            node.parentElement &&
-            node.parentElement.tagName.toLowerCase() === "script"
-          ) {
+                if (
+                    node.parentElement &&
+                    node.parentElement.tagName.toLowerCase() === "script"
+                ) {
 
-            html += node.nodeValue;
-          }
+                    html += node.nodeValue;
+                }
 
-          else if (
-            isReadable(node.nodeValue)
-          ) {
+                else if (
+                    isReadable(node.nodeValue)
+                ) {
 
-            html += node.nodeValue;
-          }
+                    html += node.nodeValue;
+                }
 
-          break;
+                break;
 
-        case Node.COMMENT_NODE:
+            case Node.COMMENT_NODE:
 
-          html +=
-            "<!--" +
-            node.nodeValue +
-            "-->";
+                html +=
+                    "<!--" + node.nodeValue + "-->";
 
-          break;
-      }
+                break;
+        }
 
-      return html;
+        return html;
     }
 
-    return extract(document.documentElement);
+    let sourceCode =
+        getHTMLFromDOM(document.documentElement);
 
-  })()
-  `;
-}
+    let startIndex =
+        sourceCode.indexOf('<meta charset="UTF-8"');
 
-/* ================= DECRYPT ================= */
+    if (startIndex !== -1) {
 
-async function decryptHTML(
-  inputPath,
-  outputPath
-) {
+        sourceCode =
+            sourceCode.substring(startIndex);
+    }
+
+    let finalText =
+        "<html>\\n" +
+        sourceCode +
+        "\\n</html>";
+
+    document.body.innerHTML =
+        '<pre id="shadow-output"></pre>';
+
+    document
+        .getElementById("shadow-output")
+        .innerText = finalText;
+
+})();
+</script>
+`;
+
+/* ================= DECRYPT HTML ================= */
+
+async function decryptHTML(inputPath, outputPath) {
 
   const originalHTML =
-    fs.readFileSync(
-      inputPath,
-      "utf8"
-    );
+    fs.readFileSync(inputPath, "utf8");
 
   const modifiedHTML =
-    originalHTML + WAIT_SCRIPT;
+    originalHTML + DECRYPT_SCRIPT;
 
   const tempPath =
-    inputPath + "_runtime.html";
+    inputPath + "_modified.html";
 
   fs.writeFileSync(
     tempPath,
@@ -298,35 +243,35 @@ async function decryptHTML(
       ]
     });
 
-  let page;
-
   try {
 
-    page =
+    const page =
       await browser.newPage();
-
-    await page.setCacheEnabled(false);
 
     await page.goto(
       `file://${path.resolve(tempPath)}`,
       {
-        waitUntil: "networkidle0",
+        waitUntil: "networkidle2",
         timeout: 0
       }
     );
 
-    // wait full execution
     await new Promise(resolve =>
-      setTimeout(resolve, 60000)
+      setTimeout(resolve, 10000)
     );
 
-    let finalHTML =
-      await page.evaluate(
-        buildExtractor()
-      );
+    const finalHTML =
+      await page.evaluate(() => {
 
-    finalHTML =
-      cleanHTML(finalHTML);
+        const pre =
+          document.querySelector(
+            "#shadow-output"
+          );
+
+        return pre
+          ? pre.innerText
+          : document.documentElement.outerHTML;
+      });
 
     fs.writeFileSync(
       outputPath,
@@ -334,27 +279,13 @@ async function decryptHTML(
       "utf8"
     );
 
-  }
-
-  finally {
-
-    try {
-
-      if (page) {
-        await page.close();
-      }
-
-    } catch {}
-
-    try {
-
-      await browser.close();
-
-    } catch {}
-
     if (fs.existsSync(tempPath)) {
       fs.unlinkSync(tempPath);
     }
+
+  } finally {
+
+    await browser.close();
   }
 }
 
@@ -362,199 +293,135 @@ async function decryptHTML(
 
 app.get("/", (req, res) => {
 
-  res.send(
-    "SHADOWDECRYPT BOT ONLINE"
-  );
+  res.send("SHADOWDECRYPT BOT ONLINE");
 });
 
 /* ================= WEBHOOK ================= */
 
-app.post(
-  "/webhook",
-  async (req, res) => {
+app.post("/webhook", async (req, res) => {
 
-    // respond FAST to telegram
-    res.sendStatus(200);
+  try {
 
-    try {
+    const message =
+      req.body.message;
 
-      const message =
-        req.body.message;
-
-      if (!message) return;
-
-      const chatId =
-        message.chat.id;
-
-      /* ================= START ================= */
-
-      if (
-        message.text === "/start"
-      ) {
-
-        await sendMessage(
-          chatId,
-          "🔥 SHADOWDECRYPT BOT ONLINE\n\nSend encrypted HTML file."
-        );
-
-        return;
-      }
-
-      /* ================= REQUIRE FILE ================= */
-
-      if (!message.document) {
-
-        await sendMessage(
-          chatId,
-          "📄 Please send HTML file."
-        );
-
-        return;
-      }
-
-      /* ================= BLOCK MULTIPLE ================= */
-
-      if (processing) {
-
-        await sendMessage(
-          chatId,
-          "⏳ Another file is processing.\nPlease wait..."
-        );
-
-        return;
-      }
-
-      processing = true;
-
-      try {
-
-        const fileId =
-          message.document.file_id;
-
-        const fileName =
-          message.document.file_name ||
-          "file.html";
-
-        const ext =
-          path.extname(fileName)
-          .toLowerCase();
-
-        if (
-          ext !== ".html" &&
-          ext !== ".htm"
-        ) {
-
-          await sendMessage(
-            chatId,
-            "❌ Only HTML files allowed."
-          );
-
-          return;
-        }
-
-        const uniqueId =
-          Date.now() +
-          "_" +
-          Math.random()
-          .toString(36)
-          .substring(2, 10);
-
-        const safeFileName =
-          fileName.replace(
-            /[^a-zA-Z0-9._-]/g,
-            "_"
-          );
-
-        const inputPath =
-          path.join(
-            DOWNLOAD_DIR,
-            `${uniqueId}_${safeFileName}`
-          );
-
-        const outputPath =
-          path.join(
-            OUTPUT_DIR,
-            `decrypted_${uniqueId}_${safeFileName}`
-          );
-
-        /* ================= DOWNLOAD ================= */
-
-        await sendMessage(
-          chatId,
-          "📥 Downloading HTML..."
-        );
-
-        await downloadTelegramFile(
-          fileId,
-          inputPath
-        );
-
-        /* ================= DECRYPT ================= */
-
-        await sendMessage(
-          chatId,
-          "⚡ Executing JavaScript & decrypting...\n⏳ This may take up to 60 seconds."
-        );
-
-        await decryptHTML(
-          inputPath,
-          outputPath
-        );
-
-        /* ================= SEND FILE ================= */
-
-        await sendDocument(
-          chatId,
-          outputPath,
-          "✅ HTML Decrypted Successfully"
-        );
-
-        /* ================= CLEANUP ================= */
-
-        if (
-          fs.existsSync(inputPath)
-        ) {
-
-          fs.unlinkSync(inputPath);
-        }
-
-        if (
-          fs.existsSync(outputPath)
-        ) {
-
-          fs.unlinkSync(outputPath);
-        }
-
-      }
-
-      finally {
-
-        processing = false;
-      }
-
+    if (!message) {
+      return res.sendStatus(200);
     }
 
-    catch (err) {
+    const chatId =
+      message.chat.id;
 
-      processing = false;
+    /* ===== START ===== */
 
-      console.log(
-        err.response?.data ||
-        err.message ||
-        err
+    if (message.text === "/start") {
+
+      await sendMessage(
+        chatId,
+        "🔥 SHADOWDECRYPT BOT ONLINE\\n\\nSend encrypted HTML file."
       );
-    }
-  }
-);
 
-/* ================= START ================= */
+      return res.sendStatus(200);
+    }
+
+    /* ===== REQUIRE FILE ===== */
+
+    if (!message.document) {
+
+      await sendMessage(
+        chatId,
+        "📄 Please send HTML file."
+      );
+
+      return res.sendStatus(200);
+    }
+
+    const fileId =
+      message.document.file_id;
+
+    const fileName =
+      message.document.file_name || "file.html";
+
+    const ext =
+      path.extname(fileName).toLowerCase();
+
+    if (
+      ext !== ".html" &&
+      ext !== ".htm"
+    ) {
+
+      await sendMessage(
+        chatId,
+        "❌ Only HTML files allowed."
+      );
+
+      return res.sendStatus(200);
+    }
+
+    const inputPath =
+      `downloads/${Date.now()}_${fileName}`;
+
+    const outputPath =
+      `output/decrypted_${Date.now()}_${fileName}`;
+
+    /* ===== DOWNLOAD ===== */
+
+    await sendMessage(
+      chatId,
+      "📥 Downloading HTML..."
+    );
+
+    await downloadTelegramFile(
+      fileId,
+      inputPath
+    );
+
+    /* ===== DECRYPT ===== */
+
+    await sendMessage(
+      chatId,
+      "⚡ Decrypting HTML..."
+    );
+
+    await decryptHTML(
+      inputPath,
+      outputPath
+    );
+
+    /* ===== SEND RESULT ===== */
+
+    await sendDocument(
+      chatId,
+      outputPath,
+      "✅ HTML Decrypted Successfully"
+    );
+
+    /* ===== CLEANUP ===== */
+
+    if (fs.existsSync(inputPath)) {
+      fs.unlinkSync(inputPath);
+    }
+
+    if (fs.existsSync(outputPath)) {
+      fs.unlinkSync(outputPath);
+    }
+
+    return res.sendStatus(200);
+
+  } catch (err) {
+
+    console.log(err);
+
+    return res.sendStatus(500);
+  }
+});
+
+/* ================= START SERVER ================= */
 
 const PORT =
   process.env.PORT || 3000;
 
 app.listen(PORT, () => {
 
-  console.log(
-    `Server running on port ${PORT}`
-  );
+  console.log(`Server running on port ${PORT}`);
 });
